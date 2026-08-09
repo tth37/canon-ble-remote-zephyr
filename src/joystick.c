@@ -11,14 +11,43 @@
 #include "freertos/task.h"
 
 #define ADC_MAX_VALUE 4095
+#define JOYSTICK_COUNT 2
+#define AXIS_COUNT 2
 
-static const char *TAG = "joystick";
+typedef struct {
+    adc_channel_t x_channel;
+    adc_channel_t y_channel;
+    gpio_num_t button_gpio;
+    bool invert_x;
+    bool invert_y;
+    const char *name;
+} joystick_config_t;
+
+static const joystick_config_t joystick_configs[JOYSTICK_COUNT] = {
+    {
+        .x_channel = JOYSTICK_LEFT_X_ADC_CHANNEL,
+        .y_channel = JOYSTICK_LEFT_Y_ADC_CHANNEL,
+        .button_gpio = JOYSTICK_LEFT_SW_GPIO,
+        .invert_x = JOYSTICK_LEFT_INVERT_X,
+        .invert_y = JOYSTICK_LEFT_INVERT_Y,
+        .name = "left",
+    },
+    {
+        .x_channel = JOYSTICK_RIGHT_X_ADC_CHANNEL,
+        .y_channel = JOYSTICK_RIGHT_Y_ADC_CHANNEL,
+        .button_gpio = JOYSTICK_RIGHT_SW_GPIO,
+        .invert_x = JOYSTICK_RIGHT_INVERT_X,
+        .invert_y = JOYSTICK_RIGHT_INVERT_Y,
+        .name = "right",
+    },
+};
+
+static const char *TAG = "joysticks";
 static adc_oneshot_unit_handle_t adc_handle;
-static int center_x;
-static int center_y;
-static bool previous_button_down;
+static int centers[JOYSTICK_COUNT][AXIS_COUNT];
+static bool previous_button_down[JOYSTICK_COUNT];
 
-esp_err_t joystick_initialize(void)
+esp_err_t joysticks_initialize(void)
 {
     const adc_oneshot_unit_init_cfg_t unit_configuration = {
         .unit_id = ADC_UNIT_1,
@@ -30,42 +59,57 @@ esp_err_t joystick_initialize(void)
         .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
-    ESP_RETURN_ON_ERROR(adc_oneshot_config_channel(adc_handle, JOYSTICK_X_ADC_CHANNEL,
-                                                   &channel_configuration),
-                        TAG, "Could not configure joystick X");
-    ESP_RETURN_ON_ERROR(adc_oneshot_config_channel(adc_handle, JOYSTICK_Y_ADC_CHANNEL,
-                                                   &channel_configuration),
-                        TAG, "Could not configure joystick Y");
+    for (int index = 0; index < JOYSTICK_COUNT; ++index) {
+        ESP_RETURN_ON_ERROR(
+            adc_oneshot_config_channel(adc_handle, joystick_configs[index].x_channel,
+                                       &channel_configuration),
+            TAG, "Could not configure %s joystick X", joystick_configs[index].name);
+        ESP_RETURN_ON_ERROR(
+            adc_oneshot_config_channel(adc_handle, joystick_configs[index].y_channel,
+                                       &channel_configuration),
+            TAG, "Could not configure %s joystick Y", joystick_configs[index].name);
+    }
 
     const gpio_config_t button_configuration = {
-        .pin_bit_mask = 1ULL << JOYSTICK_SW_GPIO,
+        .pin_bit_mask = (1ULL << JOYSTICK_LEFT_SW_GPIO) |
+                        (1ULL << JOYSTICK_RIGHT_SW_GPIO),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     ESP_RETURN_ON_ERROR(gpio_config(&button_configuration), TAG,
-                        "Could not configure joystick SW");
-    previous_button_down = gpio_get_level(JOYSTICK_SW_GPIO) == 0;
+                        "Could not configure joystick switches");
+    for (int index = 0; index < JOYSTICK_COUNT; ++index) {
+        previous_button_down[index] =
+            gpio_get_level(joystick_configs[index].button_gpio) == 0;
+    }
     return ESP_OK;
 }
 
-void joystick_calibrate(void)
+void joysticks_calibrate(void)
 {
-    int32_t total_x = 0;
-    int32_t total_y = 0;
+    int32_t totals[JOYSTICK_COUNT][AXIS_COUNT] = {{0}};
     for (int sample = 0; sample < JOYSTICK_CALIBRATION_SAMPLES; ++sample) {
-        int raw_x = 0;
-        int raw_y = 0;
-        ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, JOYSTICK_X_ADC_CHANNEL, &raw_x));
-        ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, JOYSTICK_Y_ADC_CHANNEL, &raw_y));
-        total_x += raw_x;
-        total_y += raw_y;
+        for (int index = 0; index < JOYSTICK_COUNT; ++index) {
+            int raw_x = 0;
+            int raw_y = 0;
+            ESP_ERROR_CHECK(adc_oneshot_read(adc_handle,
+                                             joystick_configs[index].x_channel, &raw_x));
+            ESP_ERROR_CHECK(adc_oneshot_read(adc_handle,
+                                             joystick_configs[index].y_channel, &raw_y));
+            totals[index][0] += raw_x;
+            totals[index][1] += raw_y;
+        }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    center_x = (int)(total_x / JOYSTICK_CALIBRATION_SAMPLES);
-    center_y = (int)(total_y / JOYSTICK_CALIBRATION_SAMPLES);
-    ESP_LOGI(TAG, "Calibrated center: x=%d, y=%d", center_x, center_y);
+
+    for (int index = 0; index < JOYSTICK_COUNT; ++index) {
+        centers[index][0] = totals[index][0] / JOYSTICK_CALIBRATION_SAMPLES;
+        centers[index][1] = totals[index][1] / JOYSTICK_CALIBRATION_SAMPLES;
+        ESP_LOGI(TAG, "%s center: x=%d, y=%d", joystick_configs[index].name,
+                 centers[index][0], centers[index][1]);
+    }
 }
 
 static float normalized_axis(int raw_value, int center_value, bool inverted)
@@ -84,24 +128,35 @@ static float normalized_axis(int raw_value, int center_value, bool inverted)
     if (available_range <= 0) {
         return 0.0F;
     }
-    float value = (float)(magnitude - JOYSTICK_CAMERA_DEAD_ZONE) / (float)available_range;
+    float value = (float)(magnitude - JOYSTICK_CAMERA_DEAD_ZONE) /
+                  (float)available_range;
     if (value > 1.0F) {
         value = 1.0F;
     }
     return delta < 0 ? -value : value;
 }
 
-void joystick_read(joystick_state_t *state)
+static void read_joystick(int index, joystick_state_t *state)
 {
     int raw_x = 0;
     int raw_y = 0;
-    ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, JOYSTICK_X_ADC_CHANNEL, &raw_x));
-    ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, JOYSTICK_Y_ADC_CHANNEL, &raw_y));
+    ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, joystick_configs[index].x_channel,
+                                     &raw_x));
+    ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, joystick_configs[index].y_channel,
+                                     &raw_y));
+    state->x = normalized_axis(raw_x, centers[index][0],
+                               joystick_configs[index].invert_x);
+    state->y = normalized_axis(raw_y, centers[index][1],
+                               joystick_configs[index].invert_y);
 
-    state->x = normalized_axis(raw_x, center_x, JOYSTICK_INVERT_X);
-    state->y = normalized_axis(raw_y, center_y, JOYSTICK_INVERT_Y);
+    state->button_down = gpio_get_level(joystick_configs[index].button_gpio) == 0;
+    state->button_pressed = state->button_down && !previous_button_down[index];
+    state->button_released = !state->button_down && previous_button_down[index];
+    previous_button_down[index] = state->button_down;
+}
 
-    const bool button_down = gpio_get_level(JOYSTICK_SW_GPIO) == 0;
-    state->button_pressed = button_down && !previous_button_down;
-    previous_button_down = button_down;
+void joysticks_read(dual_joystick_state_t *state)
+{
+    read_joystick(0, &state->left);
+    read_joystick(1, &state->right);
 }

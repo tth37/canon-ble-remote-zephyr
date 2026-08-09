@@ -5,20 +5,28 @@
 #include "driver/gpio.h"
 #include "hal/adc_types.h"
 
-// ESP32-C6-DevKitC-1 header labels used by the wiring guide.
-#define DISPLAY_SDA_GPIO GPIO_NUM_6
-#define DISPLAY_SCL_GPIO GPIO_NUM_7
+// Two independent buses let identical fixed-address OLEDs coexist.
+#define DISPLAY_LEFT_SDA_GPIO GPIO_NUM_6
+#define DISPLAY_LEFT_SCL_GPIO GPIO_NUM_7
+#define DISPLAY_RIGHT_SDA_GPIO GPIO_NUM_22
+#define DISPLAY_RIGHT_SCL_GPIO GPIO_NUM_23
 
 #define DISPLAY_I2C_FREQUENCY_HZ 400000
-#define DISPLAY_WIDTH 128
+#define DISPLAY_PANEL_WIDTH 128
+#define DISPLAY_WIDTH (DISPLAY_PANEL_WIDTH * 2)
 #define DISPLAY_HEIGHT 64
 
-// Five-pin analog joystick. Power the module from 3V3, not 5V.
-#define JOYSTICK_SW_GPIO GPIO_NUM_2
-#define JOYSTICK_X_ADC_CHANNEL ADC_CHANNEL_0
-#define JOYSTICK_Y_ADC_CHANNEL ADC_CHANNEL_1
+// Five-pin analog joysticks. Power both modules from 3V3, not 5V.
+#define JOYSTICK_LEFT_SW_GPIO GPIO_NUM_20
+#define JOYSTICK_LEFT_X_ADC_CHANNEL ADC_CHANNEL_0
+#define JOYSTICK_LEFT_Y_ADC_CHANNEL ADC_CHANNEL_1
+#define JOYSTICK_RIGHT_SW_GPIO GPIO_NUM_21
+#define JOYSTICK_RIGHT_X_ADC_CHANNEL ADC_CHANNEL_2
+#define JOYSTICK_RIGHT_Y_ADC_CHANNEL ADC_CHANNEL_3
 
 #define JOYSTICK_CAMERA_DEAD_ZONE 250
 #define JOYSTICK_CALIBRATION_SAMPLES 64
-#define JOYSTICK_INVERT_X false
-#define JOYSTICK_INVERT_Y false
+#define JOYSTICK_LEFT_INVERT_X false
+#define JOYSTICK_LEFT_INVERT_Y false
+#define JOYSTICK_RIGHT_INVERT_X false
+#define JOYSTICK_RIGHT_INVERT_Y false

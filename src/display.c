@@ -9,13 +9,26 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "soc/clk_tree_defs.h"
 
 #define SSD1306_ADDRESS_PRIMARY 0x3C
 #define SSD1306_ADDRESS_SECONDARY 0x3D
 #define SSD1306_CONTROL_COMMAND 0x00
 #define SSD1306_CONTROL_DATA 0x40
 #define DISPLAY_BUFFER_SIZE (DISPLAY_WIDTH * DISPLAY_HEIGHT / 8)
+#define PANEL_COUNT 2
+#define PANEL_DONE_LEFT BIT0
+#define PANEL_DONE_RIGHT BIT1
+#define PANEL_DONE_ALL (PANEL_DONE_LEFT | PANEL_DONE_RIGHT)
+
+typedef struct {
+    const char *name;
+    int index;
+    i2c_master_bus_handle_t bus;
+    i2c_master_dev_handle_t device;
+} panel_t;
 
 typedef struct {
     char character;
@@ -23,9 +36,14 @@ typedef struct {
 } glyph_t;
 
 static const char *TAG = "display";
-static i2c_master_bus_handle_t i2c_bus;
-static i2c_master_dev_handle_t display_device;
+static panel_t panels[PANEL_COUNT] = {
+    {.name = "left", .index = 0},
+    {.name = "right", .index = 1},
+};
 static uint8_t framebuffer[DISPLAY_BUFFER_SIZE];
+static EventGroupHandle_t present_events;
+static TaskHandle_t present_tasks[PANEL_COUNT];
+static esp_err_t present_results[PANEL_COUNT];
 
 static const glyph_t glyphs[] = {
     {' ', {0x00, 0x00, 0x00, 0x00, 0x00}},
@@ -150,40 +168,74 @@ void display_draw_centered_text(int y, const char *text, int scale)
     display_draw_text((DISPLAY_WIDTH - width) / 2, y, text, scale);
 }
 
-static esp_err_t send_commands(const uint8_t *commands, size_t command_count)
+void display_draw_centered_text_in_region(int region_x, int region_width, int y,
+                                          const char *text, int scale)
+{
+    const int width = (int)strlen(text) * 6 * scale - scale;
+    display_draw_text(region_x + (region_width - width) / 2, y, text, scale);
+}
+
+static esp_err_t send_commands(panel_t *panel, const uint8_t *commands,
+                               size_t command_count)
 {
     uint8_t packet[32] = {SSD1306_CONTROL_COMMAND};
     if (command_count > sizeof(packet) - 1U) {
         return ESP_ERR_INVALID_SIZE;
     }
     memcpy(&packet[1], commands, command_count);
-    return i2c_master_transmit(display_device, packet, command_count + 1U, 100);
+    return i2c_master_transmit(panel->device, packet, command_count + 1U, 100);
 }
 
-esp_err_t display_present(void)
+static esp_err_t present_panel(panel_t *panel)
 {
     static const uint8_t address_window[] = {0x21, 0x00, 0x7F, 0x22, 0x00, 0x07};
-    ESP_RETURN_ON_ERROR(send_commands(address_window, sizeof(address_window)), TAG,
-                        "Could not set OLED address window");
+    ESP_RETURN_ON_ERROR(send_commands(panel, address_window, sizeof(address_window)), TAG,
+                        "Could not set %s OLED address window", panel->name);
 
-    uint8_t packet[17] = {SSD1306_CONTROL_DATA};
-    for (size_t offset = 0; offset < sizeof(framebuffer); offset += 16U) {
-        memcpy(&packet[1], &framebuffer[offset], 16U);
-        ESP_RETURN_ON_ERROR(i2c_master_transmit(display_device, packet, sizeof(packet), 100), TAG,
-                            "Could not write OLED pixels");
+    uint8_t packet[DISPLAY_PANEL_WIDTH + 1] = {SSD1306_CONTROL_DATA};
+    for (int page = 0; page < DISPLAY_HEIGHT / 8; ++page) {
+        const size_t offset = (size_t)page * DISPLAY_WIDTH +
+                              (size_t)panel->index * DISPLAY_PANEL_WIDTH;
+        memcpy(&packet[1], &framebuffer[offset], DISPLAY_PANEL_WIDTH);
+        ESP_RETURN_ON_ERROR(
+            i2c_master_transmit(panel->device, packet, sizeof(packet), 100), TAG,
+            "Could not write %s OLED pixels", panel->name);
     }
     return ESP_OK;
 }
 
-static esp_err_t initialize_ssd1306(uint8_t address)
+static void present_worker(void *argument)
+{
+    panel_t *panel = argument;
+    const EventBits_t done_bit = panel->index == 0 ? PANEL_DONE_LEFT : PANEL_DONE_RIGHT;
+    while (true) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        present_results[panel->index] = present_panel(panel);
+        xEventGroupSetBits(present_events, done_bit);
+    }
+}
+
+esp_err_t display_present(void)
+{
+    xEventGroupClearBits(present_events, PANEL_DONE_ALL);
+    xTaskNotifyGive(present_tasks[0]);
+    xTaskNotifyGive(present_tasks[1]);
+    xEventGroupWaitBits(present_events, PANEL_DONE_ALL, pdTRUE, pdTRUE, portMAX_DELAY);
+    ESP_RETURN_ON_ERROR(present_results[0], TAG, "Left OLED refresh failed");
+    ESP_RETURN_ON_ERROR(present_results[1], TAG, "Right OLED refresh failed");
+    return ESP_OK;
+}
+
+static esp_err_t initialize_ssd1306(panel_t *panel, uint8_t address)
 {
     const i2c_device_config_t device_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = address,
         .scl_speed_hz = DISPLAY_I2C_FREQUENCY_HZ,
     };
-    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(i2c_bus, &device_config, &display_device), TAG,
-                        "Could not register OLED at 0x%02X", address);
+    ESP_RETURN_ON_ERROR(
+        i2c_master_bus_add_device(panel->bus, &device_config, &panel->device), TAG,
+        "Could not register %s OLED at 0x%02X", panel->name, address);
 
     static const uint8_t init_commands[] = {
         0xAE,       0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
@@ -191,51 +243,75 @@ static esp_err_t initialize_ssd1306(uint8_t address)
         0x81, 0xCF, 0xD9, 0xF1, 0xDB, 0x40, 0xA4, 0xA6,
         0xAF,
     };
-    return send_commands(init_commands, sizeof(init_commands));
+    return send_commands(panel, init_commands, sizeof(init_commands));
 }
 
-static bool find_display(uint8_t *display_address)
+static bool find_display(panel_t *panel, uint8_t *display_address)
 {
-    bool found_any_device = false;
-    ESP_LOGI(TAG, "Scanning I2C on SDA=GPIO%d, SCL=GPIO%d", DISPLAY_SDA_GPIO,
-             DISPLAY_SCL_GPIO);
-    for (uint8_t address = 1; address < 0x7F; ++address) {
-        if (i2c_master_probe(i2c_bus, address, 20) != ESP_OK) {
+    static const uint8_t possible_addresses[] = {
+        SSD1306_ADDRESS_PRIMARY,
+        SSD1306_ADDRESS_SECONDARY,
+    };
+    for (size_t index = 0;
+         index < sizeof(possible_addresses) / sizeof(possible_addresses[0]); ++index) {
+        const uint8_t address = possible_addresses[index];
+        if (i2c_master_probe(panel->bus, address, 20) != ESP_OK) {
             continue;
         }
-        found_any_device = true;
-        ESP_LOGI(TAG, "Found I2C device at 0x%02X", address);
-        if (address == SSD1306_ADDRESS_PRIMARY || address == SSD1306_ADDRESS_SECONDARY) {
-            *display_address = address;
-            return true;
-        }
+        ESP_LOGI(TAG, "Found %s OLED at 0x%02X", panel->name, address);
+        *display_address = address;
+        return true;
     }
-    if (found_any_device) {
-        ESP_LOGW(TAG, "No SSD1306 address (0x3C/0x3D) responded");
-    } else {
-        ESP_LOGW(TAG, "No I2C devices found; check display wiring");
-    }
+    ESP_LOGW(TAG, "No %s OLED found at 0x3C/0x3D", panel->name);
     return false;
+}
+
+static esp_err_t initialize_bus(panel_t *panel, bool low_power)
+{
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = low_power ? LP_I2C_NUM_0 : I2C_NUM_0,
+        .sda_io_num = low_power ? DISPLAY_LEFT_SDA_GPIO : DISPLAY_RIGHT_SDA_GPIO,
+        .scl_io_num = low_power ? DISPLAY_LEFT_SCL_GPIO : DISPLAY_RIGHT_SCL_GPIO,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    if (low_power) {
+        bus_config.lp_source_clk = LP_I2C_SCLK_DEFAULT;
+    } else {
+        bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
+    }
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &panel->bus), TAG,
+                        "Could not initialize %s I2C bus", panel->name);
+
+    uint8_t address = 0;
+    while (!find_display(panel, &address)) {
+        ESP_LOGI(TAG, "Waiting for %s display; retrying in 2 seconds", panel->name);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    return initialize_ssd1306(panel, address);
 }
 
 esp_err_t display_initialize(void)
 {
-    const i2c_master_bus_config_t bus_config = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = DISPLAY_SDA_GPIO,
-        .scl_io_num = DISPLAY_SCL_GPIO,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &i2c_bus), TAG,
-                        "Could not initialize I2C");
+    ESP_LOGI(TAG, "Left OLED: SDA=GPIO%d SCL=GPIO%d (LP I2C)",
+             DISPLAY_LEFT_SDA_GPIO, DISPLAY_LEFT_SCL_GPIO);
+    ESP_LOGI(TAG, "Right OLED: SDA=GPIO%d SCL=GPIO%d (HP I2C)",
+             DISPLAY_RIGHT_SDA_GPIO, DISPLAY_RIGHT_SCL_GPIO);
+    ESP_RETURN_ON_ERROR(initialize_bus(&panels[0], true), TAG,
+                        "Left display initialization failed");
+    ESP_RETURN_ON_ERROR(initialize_bus(&panels[1], false), TAG,
+                        "Right display initialization failed");
 
-    uint8_t address = 0;
-    while (!find_display(&address)) {
-        ESP_LOGI(TAG, "Waiting for display; retrying in 2 seconds");
-        vTaskDelay(pdMS_TO_TICKS(2000));
+    present_events = xEventGroupCreate();
+    ESP_RETURN_ON_FALSE(present_events != NULL, ESP_ERR_NO_MEM, TAG,
+                        "Could not create display event group");
+    for (int index = 0; index < PANEL_COUNT; ++index) {
+        const BaseType_t created =
+            xTaskCreate(present_worker, panels[index].name, 3072, &panels[index], 5,
+                        &present_tasks[index]);
+        ESP_RETURN_ON_FALSE(created == pdPASS, ESP_ERR_NO_MEM, TAG,
+                            "Could not create %s refresh task", panels[index].name);
     }
-    ESP_LOGI(TAG, "Initializing SSD1306 128x64 at 0x%02X", address);
-    return initialize_ssd1306(address);
+    display_clear();
+    return display_present();
 }
