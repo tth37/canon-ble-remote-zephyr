@@ -1,6 +1,8 @@
 .pio/
 .platformio/
 .venv/
+__pycache__/
+*.pyc
 build/
 sdkconfig
 sdkconfig.*

@@ -1,11 +1,17 @@
-# ESP32-C6 OLED Snake game
+# ESP32-C6 BLE status display
 
-A tiny game console for an ESP32-C6-DevKitC-1, a four-pin I2C OLED, and a
-five-pin analog joystick. It currently includes Snake and Flappy Bird.
+Bluetooth LE transport proof for an ESP32-C6-DevKitC-1 and a 128x64 SSD1306
+OLED. A macOS client connects to the board and writes text to a custom GATT
+characteristic; the board displays that text.
+
+This first phase deliberately uses an unauthenticated BLE connection rather
+than bonding. It proves discovery, connection, GATT writes, and OLED updates
+before pairing security or Codex status integration is added.
+
+The completed Snake and Flappy Bird console is preserved on the `games` Git
+branch.
 
 ## Wiring
-
-Connect wires while USB power is disconnected.
 
 | Display | ESP32-C6-DevKitC-1 |
 | --- | --- |
@@ -14,62 +20,65 @@ Connect wires while USB power is disconnected.
 | SDA | GPIO6 |
 | SCL | GPIO7 |
 
-| Joystick | ESP32-C6-DevKitC-1 |
-| --- | --- |
-| GND | G / GND |
-| +5V | **3V3 (not 5V)** |
-| VRx | GPIO0 / ADC1_CH0 |
-| VRy | GPIO1 / ADC1_CH1 |
-| SW | GPIO2 |
+The joystick is unused on the `main` branch and may remain connected.
 
-Do not use 5V unless the display module explicitly guarantees that its I2C
-pull-ups and logic are safe for a 3.3V microcontroller.
+## Protocol
 
-## Supported first target
+- BLE device name: `Codex Display`
+- Service UUID: `7b1e0001-6d8f-4b7a-9c2d-4a7f1d2e3c40`
+- Writable/readable text UUID: `7b1e0002-6d8f-4b7a-9c2d-4a7f1d2e3c40`
+- Maximum message: 120 UTF-8 bytes (ASCII renders best with the compact font)
 
-- SSD1306 controller
-- 128x64 monochrome OLED
-- I2C address 0x3C or 0x3D (detected automatically)
+No kernel driver is required on macOS. The Python client uses CoreBluetooth
+through Bleak. On first use, macOS may ask for Bluetooth permission for the
+terminal application running Python.
 
-The serial log reports every detected I2C address. This makes wiring and
-controller mismatches visible even if the screen cannot yet be initialized.
-
-## Menu and controls
-
-Leave the joystick centered while the startup calibration screen is visible.
-In the menu, move up/down (or left/right) to select a game and press SW to
-launch it. Hold SW for about one second from either game to return to the menu.
-
-### Snake
-
-Move the joystick up, down, left, or right to steer, returning it near center
-between turns. A short SW press pauses/resumes or restarts after a collision.
-Crossing an edge wraps the snake around to the opposite side of the board.
-
-The game begins at a 180 ms movement interval and speeds up as food is eaten.
-
-### Flappy Bird
-
-Press SW briefly to flap. Pass through pipe gaps to score; after a collision,
-press SW to restart.
-
-If an axis runs backwards for the physical orientation of your module, change
-`JOYSTICK_INVERT_X` or `JOYSTICK_INVERT_Y` in `src/display_config.h` to `true`.
-
-## Build, upload, and monitor
-
-Set up the project-local Python environment, then build, upload, and monitor:
+## Build and upload
 
 ```sh
 make setup
 make build
 make upload
-make monitor
 ```
 
-`make setup` creates `.venv` for PlatformIO. The Makefile also points
-`PLATFORMIO_CORE_DIR` at `.platformio`, so the compiler, ESP-IDF framework,
-and upload tools remain inside this project instead of being installed in a
-user-global tool directory.
+The OLED should progress through `STARTING BLE` and then `ADVERTISING / CODEX
+DISPLAY`.
 
-The configured serial device is `/dev/cu.usbserial-310`.
+## Scan and send from macOS
+
+Install the PC-side dependency into the same project-local `.venv`:
+
+```sh
+make ble-setup
+```
+
+Scan:
+
+```sh
+.venv/bin/python pc/ble_display.py scan
+```
+
+Send a test message:
+
+```sh
+.venv/bin/python pc/ble_display.py send "HELLO FROM MAC"
+```
+
+The client scans by device name, connects, writes the text, reads it back for
+verification, and disconnects. The OLED returns to advertising after the
+client disconnects without replacing the most recent message. That message
+also remains available through the read characteristic.
+
+## Git branches
+
+```sh
+git switch main   # BLE display bridge
+git switch games  # Snake + Flappy Bird console
+```
+
+## Later Codex integration
+
+Once this transport is reliable, a small local process can translate Codex
+lifecycle/notification JSON into short messages such as `WORKING`, `WAITING`,
+or `DONE`, then invoke this BLE client. That integration is intentionally not
+part of the first connectivity milestone.

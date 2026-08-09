@@ -3,7 +3,7 @@ export PLATFORMIO_CORE_DIR
 
 PLATFORMIO := .venv/bin/pio
 
-.PHONY: setup build upload monitor clean
+.PHONY: setup build upload monitor clean ble-setup ble-scan
 
 setup: $(PLATFORMIO)
 
@@ -22,3 +22,9 @@ monitor: setup
 
 clean: setup
 	$(PLATFORMIO) run --target clean
+
+ble-setup: setup
+	uv pip install --python .venv/bin/python -r pc/requirements.txt
+
+ble-scan: ble-setup
+	.venv/bin/python pc/ble_display.py scan

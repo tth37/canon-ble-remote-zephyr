@@ -1,3 +1,3 @@
-idf_component_register(SRCS "main.c" "display.c" "input.c" "snake_game.c" "flappy_game.c"
+idf_component_register(SRCS "main.c" "display.c" "ble_display_service.c"
                        INCLUDE_DIRS "."
-                       REQUIRES esp_adc esp_driver_gpio esp_driver_i2c)
+                       REQUIRES bt esp_driver_i2c nvs_flash)
