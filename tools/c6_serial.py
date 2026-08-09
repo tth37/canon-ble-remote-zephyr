@@ -16,6 +16,13 @@ DEFAULT_BAUD = int(os.environ.get("C6_SERIAL_BAUD", "115200"))
 DEFAULT_EOL = os.environ.get("C6_SERIAL_EOL", "CR").upper()
 
 
+class TransmitCR(miniterm.Transform):
+    """Send CR for Enter without rewriting received CRLF into two newlines."""
+
+    def tx(self, text: str) -> str:
+        return text.replace("\n", "\r")
+
+
 def find_default_port() -> str:
     """Choose an explicit, known, or uniquely identifiable USB serial port."""
     configured_port = os.environ.get("C6_SERIAL_PORT")
@@ -58,6 +65,9 @@ def main() -> None:
     # ESP-IDF accepts CR or LF as Enter. Miniterm's CRLF default therefore
     # submits two empty lines and prints two prompts for a single key press.
     sys.argv[1:] = apply_terminal_defaults(sys.argv[1:])
+    # Pyserial's built-in CR mode also maps received CR to LF, turning the
+    # board's CRLF output into LFLF. Only alter the transmit direction.
+    miniterm.EOL_TRANSFORMATIONS["cr"] = TransmitCR
     miniterm.main(
         default_port=find_default_port(),
         default_baudrate=DEFAULT_BAUD,
