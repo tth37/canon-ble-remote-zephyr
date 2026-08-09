@@ -15,8 +15,9 @@ esp_err_t console_app_start(void)
     repl_config.prompt = CONSOLE_PROMPT;
     repl_config.max_cmdline_length = CONSOLE_LINE_LENGTH;
 
-    // History is deliberately disabled because Wi-Fi passwords may be typed.
-    repl_config.max_history_len = 0;
+    // ESP-IDF's linenoise rejects zero. Keep its minimum valid history size;
+    // credential-bearing commands evict themselves after execution.
+    repl_config.max_history_len = 1;
     repl_config.history_save_path = NULL;
 
     ESP_ERROR_CHECK(esp_console_register_help_command());

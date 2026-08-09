@@ -6,8 +6,9 @@ display or joystick dependencies. Communication uses the board's USB-to-UART
 bridge at 115200 baud.
 
 The firmware uses ESP-IDF's `esp_console` REPL with line editing, command
-completion, and argument splitting. Command history is disabled because Wi-Fi
-passwords can be entered on the command line.
+completion, and argument splitting. History is kept to one in-memory entry;
+credential-bearing `wifi join` commands immediately evict themselves and
+history is never saved to flash.
 
 ## Build, upload, and connect
 

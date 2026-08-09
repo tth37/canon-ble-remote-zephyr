@@ -7,6 +7,7 @@
 
 #include "esp_console.h"
 #include "esp_netif.h"
+#include "linenoise/linenoise.h"
 #include "wifi_service.h"
 
 #define DEFAULT_SCAN_LIMIT 15
@@ -111,9 +112,6 @@ static int command_join(int argc, char **argv)
     printf("Connecting to '%s'...\n", argv[2]);
     const esp_err_t result =
         wifi_service_join(argv[2], password, JOIN_TIMEOUT_MS);
-    if (argc == 4) {
-        memset(argv[3], 0, strlen(argv[3]));
-    }
     if (result != ESP_OK) {
         printf("Connection failed: %s\n", esp_err_to_name(result));
         return 1;
@@ -166,7 +164,14 @@ static int command_wifi(int argc, char **argv)
         return command_scan(argc, argv);
     }
     if (strcmp(argv[1], "join") == 0) {
-        return command_join(argc, argv);
+        const int result = command_join(argc, argv);
+        if (argc >= 4) {
+            memset(argv[3], 0, strlen(argv[3]));
+        }
+        // The REPL adds the line to history before invoking this handler.
+        // With a one-entry history, adding a blank line evicts credentials.
+        linenoiseHistoryAdd("");
+        return result;
     }
     if (strcmp(argv[1], "status") == 0) {
         return command_status();
