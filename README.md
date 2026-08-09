@@ -23,8 +23,9 @@ make serial
 
 The configured serial device is `/dev/cu.usbserial-310`. `make serial` runs
 `tools/c6_serial.py`, an interactive pyserial terminal with the correct port,
-baud rate, and control-line defaults. Press Enter if the `c6>` prompt is not
-immediately visible. Exit with `Ctrl+]`.
+baud rate, control-line, and `CR` line-ending defaults. The `CR` setting avoids
+submitting two empty commands for one Enter key. Press Enter if the `c6>` prompt
+is not immediately visible. Exit with `Ctrl+]`.
 
 Override the defaults when necessary:
 

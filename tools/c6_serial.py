@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from serial.tools import list_ports
@@ -12,6 +13,7 @@ from serial.tools import miniterm
 
 PREFERRED_PORT = "/dev/cu.usbserial-310"
 DEFAULT_BAUD = int(os.environ.get("C6_SERIAL_BAUD", "115200"))
+DEFAULT_EOL = os.environ.get("C6_SERIAL_EOL", "CR").upper()
 
 
 def find_default_port() -> str:
@@ -40,8 +42,22 @@ def find_default_port() -> str:
     return PREFERRED_PORT
 
 
+def apply_terminal_defaults(arguments: list[str]) -> list[str]:
+    """Add defaults that pyserial's miniterm API does not expose directly."""
+    has_eol = any(
+        argument == "--eol" or argument.startswith("--eol=")
+        for argument in arguments
+    )
+    if has_eol:
+        return arguments
+    return [*arguments, "--eol", DEFAULT_EOL]
+
+
 def main() -> None:
     """Run pyserial's interactive terminal with project-friendly defaults."""
+    # ESP-IDF accepts CR or LF as Enter. Miniterm's CRLF default therefore
+    # submits two empty lines and prints two prompts for a single key press.
+    sys.argv[1:] = apply_terminal_defaults(sys.argv[1:])
     miniterm.main(
         default_port=find_default_port(),
         default_baudrate=DEFAULT_BAUD,
