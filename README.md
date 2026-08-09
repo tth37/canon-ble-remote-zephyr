@@ -133,10 +133,10 @@ enable only one diagnostics engine if duplicate diagnostics appear.
 ## Demo branches
 
 ```sh
-git switch wifi-shell # serial-only Wi-Fi command shell
+git switch main       # serial Wi-Fi and Canon BLE command shell
 git switch dual-rift  # dual-screen twin-stick Rift Runner
 git switch arduboy    # Arduboy2 sprite port and playground
-git switch main       # joystick-controlled 3D renderer
+git switch renderer   # joystick-controlled 3D renderer
 git switch ble        # BLE text display bridge
 git switch games      # Snake + Flappy Bird console
 ```
