@@ -83,6 +83,11 @@ void display_clear(void)
     memset(framebuffer, 0, sizeof(framebuffer));
 }
 
+uint8_t *display_get_framebuffer(void)
+{
+    return framebuffer;
+}
+
 void display_draw_pixel(int x, int y, bool on)
 {
     if (x < 0 || x >= DISPLAY_WIDTH || y < 0 || y >= DISPLAY_HEIGHT) {
