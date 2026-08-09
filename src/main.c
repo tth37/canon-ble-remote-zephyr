@@ -1,3 +1,4 @@
+#include "canon_ble_service.h"
 #include "console_app.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -21,6 +22,11 @@ void app_main(void)
 {
     initialize_nvs();
     ESP_ERROR_CHECK(wifi_service_initialize());
+    const esp_err_t camera_result = canon_ble_service_initialize();
+    if (camera_result != ESP_OK) {
+        ESP_LOGE(TAG, "Canon BLE service unavailable: %s",
+                 esp_err_to_name(camera_result));
+    }
     ESP_ERROR_CHECK(console_app_start());
-    ESP_LOGI(TAG, "Serial Wi-Fi shell is ready");
+    ESP_LOGI(TAG, "Serial connectivity shell is ready");
 }

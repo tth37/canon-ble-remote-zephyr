@@ -1,6 +1,11 @@
 PLATFORMIO_CORE_DIR := $(CURDIR)/.platformio
 export PLATFORMIO_CORE_DIR
 
+# This project has no managed ESP-IDF components. Disabling the optional
+# component manager also keeps clean/configure builds self-contained.
+IDF_COMPONENT_MANAGER := 0
+export IDF_COMPONENT_MANAGER
+
 PLATFORMIO := .venv/bin/pio
 PYTHON := .venv/bin/python
 

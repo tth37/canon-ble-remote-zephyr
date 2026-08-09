@@ -1,5 +1,6 @@
 #include "console_app.h"
 
+#include "canon_ble_commands.h"
 #include "esp_console.h"
 #include "system_commands.h"
 #include "wifi_commands.h"
@@ -21,6 +22,7 @@ esp_err_t console_app_start(void)
     repl_config.history_save_path = NULL;
 
     ESP_ERROR_CHECK(esp_console_register_help_command());
+    ESP_ERROR_CHECK(canon_ble_commands_register());
     ESP_ERROR_CHECK(system_commands_register());
     ESP_ERROR_CHECK(wifi_commands_register());
 

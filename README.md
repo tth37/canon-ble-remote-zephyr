@@ -1,9 +1,9 @@
-# ESP32-C6 serial Wi-Fi shell
+# ESP32-C6 serial connectivity shell
 
-An extensible ESP-IDF command shell for experimenting with the Wi-Fi and
-system features of an ESP32-C6-DevKitC-1. This branch intentionally has no
-display or joystick dependencies. Communication uses the board's USB-to-UART
-bridge at 115200 baud.
+An extensible ESP-IDF command shell for experimenting with the Wi-Fi,
+Bluetooth LE, and system features of an ESP32-C6-DevKitC-1. This branch
+intentionally has no display or joystick dependencies. Communication uses the
+board's USB-to-UART bridge at 115200 baud.
 
 The firmware uses ESP-IDF's `esp_console` REPL with line editing, command
 completion, and argument splitting. History is kept to one in-memory entry;
@@ -50,6 +50,14 @@ wifi scan [limit]
 wifi join <ssid> [password]
 wifi status
 wifi leave
+camera help
+camera pair [seconds]
+camera connect
+camera shutter
+camera focus
+camera status
+camera disconnect
+camera forget
 ```
 
 Examples:
@@ -67,12 +75,42 @@ written to NVS. `wifi leave` also clears the in-memory station configuration.
 The password is still visible while typed in the terminal, so use the serial
 shell only in a trusted local environment.
 
+## Canon BLE remote
+
+The `camera` service is a native ESP-IDF/NimBLE port of the protocol used by
+[maxmacstn/ESP32-Canon-BLE-Remote](https://github.com/maxmacstn/ESP32-Canon-BLE-Remote).
+It does not depend on Arduino, Arduino BLE, or ArduinoNvs. The saved camera
+address and NimBLE bond survive a reboot in NVS.
+
+To pair:
+
+1. On the camera, open **Wireless Communication Settings > Bluetooth Function
+   > Remote > Pairing**. The exact menu name varies by Canon model.
+2. Run `camera pair 20` while that screen is open.
+3. Accept or finish the pairing prompt on the camera if it asks.
+4. Run `camera status`, then try `camera shutter` or `camera focus`.
+
+After the initial pairing, control commands reconnect automatically when
+needed. `camera disconnect` keeps the bond but closes the current connection;
+`camera forget` removes both the saved address and the corresponding NimBLE
+bond. If either side has stale pairing information, forget/delete the remote
+on both devices and pair again.
+
+The upstream project reports compatibility with the EOS M50. Canon models and
+camera firmware can differ, so pairing and shutter behavior must still be
+verified on the particular camera. For still photos, Canon may also require
+the remote/self-timer drive mode; for movies, enable remote control in the
+camera menu.
+
 ## Source layout
 
 - `src/console_app.c`: UART REPL setup and command registration
 - `src/system_commands.c`: chip, heap, uptime, and reboot commands
 - `src/wifi_service.c`: Wi-Fi lifecycle, events, scanning, and station state
 - `src/wifi_commands.c`: serial command parsing and formatted output
+- `src/canon_ble_service.c`: Canon discovery, pairing, bonding, and controls
+- `src/canon_ble_commands.c`: `camera` command parsing and status output
+- `third_party/esp32-canon-ble-remote/`: upstream attribution and MIT license
 
 New features should expose a small service API and register their shell
 commands in a separate module. Long-lived state belongs in the service rather
