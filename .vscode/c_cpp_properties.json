@@ -1,0 +1,19 @@
+{
+  "configurations": [
+    {
+      "name": "ESP32-C6",
+      "compileCommands": "${workspaceFolder}/compile_commands.json",
+      "compilerPath": "${workspaceFolder}/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-gcc",
+      "includePath": [
+        "${workspaceFolder}/src/**",
+        "${workspaceFolder}/.platformio/packages/framework-espidf/components/**"
+      ],
+      "defines": [
+        "ESP_PLATFORM",
+        "IDF_VER=\"v6.0.1\""
+      ],
+      "cStandard": "c17"
+    }
+  ],
+  "version": 4
+}

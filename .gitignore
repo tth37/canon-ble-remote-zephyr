@@ -7,3 +7,4 @@ build/
 sdkconfig
 sdkconfig.*
 !sdkconfig.defaults
+compile_commands.json

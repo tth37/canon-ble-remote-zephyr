@@ -1,0 +1,28 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ESP32-C6: Build",
+      "type": "shell",
+      "command": "make build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "ESP32-C6: Refresh compile commands",
+      "type": "shell",
+      "command": "make compile-commands",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32-C6: Serial terminal",
+      "type": "shell",
+      "command": "make serial",
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}
