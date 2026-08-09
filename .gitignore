@@ -1,0 +1,7 @@
+.pio/
+.platformio/
+.venv/
+build/
+sdkconfig
+sdkconfig.*
+!sdkconfig.defaults
