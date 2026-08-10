@@ -52,6 +52,7 @@ wifi status
 wifi leave
 camera help
 camera pair [seconds]
+camera mock-pair [seconds]
 camera connect
 camera shutter
 camera focus
@@ -102,6 +103,40 @@ verified on the particular camera. For still photos, Canon may also require
 the remote/self-timer drive mode; for movies, enable remote control in the
 camera menu.
 
+### Test without a camera
+
+On macOS, the repository can advertise a mock Canon camera using CoreBluetooth.
+No extra BLE adapter or system driver is required. Start it before asking the
+C6 to scan:
+
+```sh
+# Terminal 1: leave this running and accept the macOS Bluetooth permission.
+make mock-camera
+
+# Terminal 2:
+make serial
+```
+
+Then use the C6 shell:
+
+```text
+c6> camera forget
+c6> camera mock-pair 20
+c6> camera status
+c6> camera shutter
+c6> camera focus
+c6> camera disconnect
+c6> camera connect
+```
+
+The mock validates and logs the exact pairing name and button bytes. The
+explicit `mock-pair` command uses an unencrypted, RAM-only connection because
+macOS CoreBluetooth cannot reproduce the Canon camera's bonding exchange when
+acting as this command-line peripheral. The normal `camera pair` path remains
+strict and unchanged for the real camera. `make mock-camera
+ARGS=--require-encryption` exposes CoreBluetooth's encrypted attributes for
+diagnosis, but it is not expected to complete Canon-style pairing.
+
 ## Source layout
 
 - `src/console_app.c`: UART REPL setup and command registration
@@ -110,6 +145,7 @@ camera menu.
 - `src/wifi_commands.c`: serial command parsing and formatted output
 - `src/canon_ble_service.c`: Canon discovery, pairing, bonding, and controls
 - `src/canon_ble_commands.c`: `camera` command parsing and status output
+- `tools/mock_canon_camera.py`: desktop BLE peripheral and protocol validator
 - `third_party/esp32-canon-ble-remote/`: upstream attribution and MIT license
 
 New features should expose a small service API and register their shell

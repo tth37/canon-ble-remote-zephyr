@@ -63,6 +63,7 @@ typedef struct {
     volatile bool encrypted;
     volatile bool ready;
     volatile bool scanning;
+    volatile bool mock_mode;
     volatile bool disconnect_requested;
     uint8_t own_address_type;
     ble_addr_t camera_address;
@@ -315,6 +316,13 @@ static esp_err_t disconnect_link(void)
     return wait_for_event(EVENT_DISCONNECTED, DISCONNECT_TIMEOUT_MS);
 }
 
+static void disconnect_after_failure(void)
+{
+    const int failed_ble_error = context.last_ble_error;
+    disconnect_link();
+    context.last_ble_error = failed_ble_error;
+}
+
 static esp_err_t connect_link(const ble_addr_t *address)
 {
     context.operation_result = 0;
@@ -354,7 +362,8 @@ static esp_err_t connect_for_control(void)
     if (!context.paired) {
         return ESP_ERR_NOT_FOUND;
     }
-    if (context.ready && context.connected && context.encrypted) {
+    if (context.ready && context.connected &&
+        (context.encrypted || context.mock_mode)) {
         return ESP_OK;
     }
     if (context.connected) {
@@ -368,20 +377,22 @@ static esp_err_t connect_for_control(void)
     if (result != ESP_OK) {
         return result;
     }
-    result = secure_link();
-    if (result != ESP_OK) {
-        disconnect_link();
-        return result;
+    if (!context.mock_mode) {
+        result = secure_link();
+        if (result != ESP_OK) {
+            disconnect_after_failure();
+            return result;
+        }
     }
     result = discover_service();
     if (result != ESP_OK) {
-        disconnect_link();
+        disconnect_after_failure();
         return result;
     }
     uint16_t trigger_handle = 0;
     result = discover_characteristic(&CANON_TRIGGER_UUID.u, &trigger_handle);
     if (result != ESP_OK) {
-        disconnect_link();
+        disconnect_after_failure();
         return result;
     }
     context.discovered_value_handle = trigger_handle;
@@ -529,6 +540,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *argument)
         if (!context.encrypted && context.operation_result == 0) {
             context.operation_result = BLE_HS_EAUTHEN;
         }
+        if (!context.encrypted) {
+            ESP_LOGW(TAG, "BLE security failed; status=%d, lookup=%d",
+                     event->enc_change.status, find_result);
+        }
         xEventGroupSetBits(context.events, EVENT_SECURITY_DONE);
         return 0;
     }
@@ -596,7 +611,7 @@ esp_err_t canon_ble_service_initialize(void)
     return wait_for_event(EVENT_HOST_SYNCED, HOST_SYNC_TIMEOUT_MS);
 }
 
-esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
+static esp_err_t pair_camera(uint32_t scan_seconds, bool mock_mode)
 {
     if (!context.initialized || !context.host_synced) {
         return ESP_ERR_INVALID_STATE;
@@ -608,6 +623,7 @@ esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
         return ESP_ERR_TIMEOUT;
     }
 
+    context.last_ble_error = 0;
     esp_err_t result = disconnect_link();
     if (result == ESP_OK) {
         result = scan_for_camera(scan_seconds);
@@ -631,7 +647,7 @@ esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
             sizeof(payload));
         result = result_from_ble_error(write_result);
     }
-    if (result == ESP_OK) {
+    if (result == ESP_OK && !mock_mode) {
         vTaskDelay(pdMS_TO_TICKS(250U));
         result = secure_link();
     }
@@ -640,8 +656,14 @@ esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
         const int find_result = ble_gap_conn_find(
             context.connection_handle, &description);
         if (find_result == 0) {
-            context.camera_address = description.peer_id_addr;
-            result = save_camera_address();
+            context.camera_address = mock_mode ? description.peer_ota_addr
+                                               : description.peer_id_addr;
+            context.mock_mode = mock_mode;
+            if (mock_mode) {
+                context.paired = true;
+            } else {
+                result = save_camera_address();
+            }
         } else {
             result = result_from_ble_error(find_result);
         }
@@ -658,11 +680,21 @@ esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
             }
         }
     } else {
-        disconnect_link();
+        disconnect_after_failure();
     }
 
     xSemaphoreGive(context.operation_mutex);
     return result;
+}
+
+esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
+{
+    return pair_camera(scan_seconds, false);
+}
+
+esp_err_t canon_ble_service_pair_mock(uint32_t scan_seconds)
+{
+    return pair_camera(scan_seconds, true);
 }
 
 esp_err_t canon_ble_service_connect(void)
@@ -673,6 +705,7 @@ esp_err_t canon_ble_service_connect(void)
     if (xSemaphoreTake(context.operation_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
+    context.last_ble_error = 0;
     const esp_err_t result = connect_for_control();
     xSemaphoreGive(context.operation_mutex);
     return result;
@@ -686,6 +719,7 @@ esp_err_t canon_ble_service_disconnect(void)
     if (xSemaphoreTake(context.operation_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
+    context.last_ble_error = 0;
     const esp_err_t result = disconnect_link();
     xSemaphoreGive(context.operation_mutex);
     return result;
@@ -700,6 +734,7 @@ esp_err_t canon_ble_service_forget(void)
         return ESP_ERR_TIMEOUT;
     }
 
+    context.last_ble_error = 0;
     esp_err_t result = disconnect_link();
     if (result == ESP_OK && context.paired) {
         const int delete_result =
@@ -714,6 +749,7 @@ esp_err_t canon_ble_service_forget(void)
     if (result == ESP_OK) {
         memset(&context.camera_address, 0, sizeof(context.camera_address));
         context.paired = false;
+        context.mock_mode = false;
         context.last_ble_error = 0;
     }
 
@@ -730,6 +766,7 @@ static esp_err_t send_button_command(uint8_t pressed_value)
         return ESP_ERR_TIMEOUT;
     }
 
+    context.last_ble_error = 0;
     esp_err_t result = connect_for_control();
     if (result == ESP_OK) {
         const int press_result = ble_gattc_write_no_rsp_flat(
@@ -776,6 +813,7 @@ void canon_ble_service_get_status(canon_ble_status_t *status)
     status->encrypted = context.encrypted;
     status->ready = context.ready;
     status->scanning = context.scanning;
+    status->mock_mode = context.mock_mode;
     status->last_ble_error = context.last_ble_error;
     if (context.paired) {
         format_address(&context.camera_address, status->camera_address);

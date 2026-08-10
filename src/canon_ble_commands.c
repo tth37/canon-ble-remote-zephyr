@@ -15,6 +15,7 @@ static void print_usage(void)
 {
     printf("Canon camera commands:\n");
     printf("  camera pair [seconds]  Scan for and pair a camera\n");
+    printf("  camera mock-pair [seconds]  Pair with the PC mock (no bond)\n");
     printf("  camera connect         Connect to the paired camera\n");
     printf("  camera shutter         Take a photo or toggle movie recording\n");
     printf("  camera focus           Send a focus command\n");
@@ -56,10 +57,11 @@ static int scan_seconds_from_args(int argc, char **argv)
     return (int)value;
 }
 
-static int command_pair(int argc, char **argv)
+static int command_pair(int argc, char **argv, bool mock_mode)
 {
     if (argc > 3) {
-        printf("Usage: camera pair [seconds]\n");
+        printf("Usage: camera %s [seconds]\n",
+               mock_mode ? "mock-pair" : "pair");
         return 1;
     }
     const int seconds = scan_seconds_from_args(argc, argv);
@@ -68,10 +70,16 @@ static int command_pair(int argc, char **argv)
         return 1;
     }
 
-    printf("Put the camera in Bluetooth Remote pairing mode now.\n");
+    if (mock_mode) {
+        printf("Start `make mock-camera` on the PC now.\n");
+    } else {
+        printf("Put the camera in Bluetooth Remote pairing mode now.\n");
+    }
     printf("Scanning for Canon service for %d seconds...\n", seconds);
-    return print_result("Pairing",
-                        canon_ble_service_pair((uint32_t)seconds));
+    const esp_err_t result = mock_mode
+                                 ? canon_ble_service_pair_mock((uint32_t)seconds)
+                                 : canon_ble_service_pair((uint32_t)seconds);
+    return print_result(mock_mode ? "Mock pairing" : "Pairing", result);
 }
 
 static int command_status(void)
@@ -86,6 +94,11 @@ static int command_status(void)
     printf("Connection:  %s\n", status.connected ? "connected" : "disconnected");
     printf("Encrypted:   %s\n", status.encrypted ? "yes" : "no");
     printf("Control:     %s\n", status.ready ? "ready" : "not ready");
+    const char *mode = status.mock_mode
+                           ? "PC mock (unencrypted)"
+                           : status.paired ? "camera (bonded)"
+                                           : "normal camera pairing";
+    printf("Mode:        %s\n", mode);
     printf("Scanning:    %s\n", status.scanning ? "yes" : "no");
     if (status.last_ble_error != 0) {
         printf("Last NimBLE status: %d\n", status.last_ble_error);
@@ -100,7 +113,10 @@ static int command_camera(int argc, char **argv)
         return 0;
     }
     if (strcmp(argv[1], "pair") == 0) {
-        return command_pair(argc, argv);
+        return command_pair(argc, argv, false);
+    }
+    if (strcmp(argv[1], "mock-pair") == 0) {
+        return command_pair(argc, argv, true);
     }
     if (argc != 2) {
         print_usage();
@@ -135,7 +151,7 @@ esp_err_t canon_ble_commands_register(void)
     const esp_console_cmd_t command = {
         .command = "camera",
         .help = "Pair and control a Canon camera over BLE",
-        .hint = "<pair|connect|shutter|focus|status|disconnect|forget|help>",
+        .hint = "<pair|mock-pair|connect|shutter|focus|status|disconnect|forget|help>",
         .func = command_camera,
     };
     return esp_console_cmd_register(&command);
