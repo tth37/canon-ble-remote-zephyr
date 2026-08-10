@@ -1,11 +1,14 @@
 {
   "configurations": [
     {
-      "name": "ESP32-C6",
+      "name": "Selected firmware target",
       "compileCommands": "${workspaceFolder}/compile_commands.json",
       "compilerPath": "${workspaceFolder}/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-gcc",
       "includePath": [
-        "${workspaceFolder}/src/**",
+        "${workspaceFolder}/firmware/esp32c6/src/**",
+        "${workspaceFolder}/firmware/ch582m/include/**",
+        "${workspaceFolder}/shared/canon/include/**",
+        "${workspaceFolder}/.cache/ch58x-sdk/EVT/EXAM/**",
         "${workspaceFolder}/.platformio/packages/framework-espidf/components/**"
       ],
       "defines": [

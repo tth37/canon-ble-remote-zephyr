@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "ESP32-C6: Build",
+      "label": "Firmware: Build selected target",
       "type": "shell",
       "command": "make build",
       "group": {
@@ -12,13 +12,37 @@
       "problemMatcher": "$gcc"
     },
     {
-      "label": "ESP32-C6: Refresh compile commands",
+      "label": "Firmware: Select ESP32-C6",
+      "type": "shell",
+      "command": "make select TARGET=esp32c6",
+      "problemMatcher": []
+    },
+    {
+      "label": "Firmware: Select CH582M",
+      "type": "shell",
+      "command": "make select TARGET=ch582m",
+      "problemMatcher": []
+    },
+    {
+      "label": "Firmware: Upload selected target",
+      "type": "shell",
+      "command": "make upload",
+      "problemMatcher": []
+    },
+    {
+      "label": "Firmware: Run shared tests",
+      "type": "shell",
+      "command": "make test",
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Firmware: Refresh compile commands",
       "type": "shell",
       "command": "make compile-commands",
       "problemMatcher": []
     },
     {
-      "label": "ESP32-C6: Serial terminal",
+      "label": "Firmware: Serial terminal",
       "type": "shell",
       "command": "make serial",
       "isBackground": true,

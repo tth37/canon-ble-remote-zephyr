@@ -9,3 +9,6 @@ sdkconfig.*
 !sdkconfig.defaults
 compile_commands.json
 .cache/
+.target
+.build/
+firmware/*/compile_commands.json

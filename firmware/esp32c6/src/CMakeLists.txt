@@ -6,6 +6,7 @@ idf_component_register(
          "system_commands.c"
          "wifi_commands.c"
          "wifi_service.c"
-    INCLUDE_DIRS "."
+         "../../../shared/canon/src/canon_protocol.c"
+    INCLUDE_DIRS "." "../../../shared/canon/include"
     REQUIRES bt console esp_event esp_netif esp_wifi heap nvs_flash spi_flash
 )

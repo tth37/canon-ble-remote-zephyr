@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "canon_protocol.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -37,21 +38,14 @@
 #define CANON_NVS_ADDRESS_KEY "camera_addr"
 #define CANON_REMOTE_NAME "ESP32 Remote"
 
-#define CANON_BUTTON_RELEASE 0x80U
-#define CANON_BUTTON_FOCUS 0x40U
-#define CANON_MODE_IMMEDIATE 0x0cU
-
 static const char *TAG = "canon_ble";
 
 static const ble_uuid128_t CANON_SERVICE_UUID =
-    BLE_UUID128_INIT(0x21, 0xa8, 0xff, 0x2f, 0x49, 0xd8, 0x00, 0x00,
-                     0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00);
+    BLE_UUID128_INIT(CANON_SERVICE_UUID_LE_BYTES);
 static const ble_uuid128_t CANON_PAIRING_UUID =
-    BLE_UUID128_INIT(0x21, 0xa8, 0xff, 0x2f, 0x49, 0xd8, 0x00, 0x00,
-                     0x00, 0x10, 0x00, 0x00, 0x02, 0x00, 0x05, 0x00);
+    BLE_UUID128_INIT(CANON_PAIRING_UUID_LE_BYTES);
 static const ble_uuid128_t CANON_TRIGGER_UUID =
-    BLE_UUID128_INIT(0x21, 0xa8, 0xff, 0x2f, 0x49, 0xd8, 0x00, 0x00,
-                     0x00, 0x10, 0x00, 0x00, 0x03, 0x00, 0x05, 0x00);
+    BLE_UUID128_INIT(CANON_TRIGGER_UUID_LE_BYTES);
 
 typedef struct {
     EventGroupHandle_t events;
@@ -83,6 +77,7 @@ static canon_ble_context_t context = {
 void ble_store_config_init(void);
 
 static int gap_event_handler(struct ble_gap_event *event, void *argument);
+static esp_err_t save_camera_address(void);
 
 static void format_address(const ble_addr_t *address, char output[18])
 {
@@ -132,15 +127,36 @@ static esp_err_t load_camera_address(void)
         return result;
     }
 
-    size_t address_size = sizeof(context.camera_address);
+    uint8_t stored_address[CANON_PEER_RECORD_SIZE];
+    size_t address_size = sizeof(stored_address);
     result = nvs_get_blob(handle, CANON_NVS_ADDRESS_KEY,
-                          &context.camera_address, &address_size);
+                          stored_address, &address_size);
     nvs_close(handle);
-    if (result == ESP_OK && address_size == sizeof(context.camera_address)) {
+
+    if (result != ESP_OK) {
+        return result;
+    }
+    if (address_size == CANON_PEER_RECORD_SIZE &&
+        canon_peer_record_decode(stored_address,
+                                 &context.camera_address.type,
+                                 context.camera_address.val)) {
         context.paired = true;
         return ESP_OK;
     }
-    return result == ESP_OK ? ESP_ERR_INVALID_SIZE : result;
+
+    /* Migrate addresses written before the portable record format existed. */
+    if (address_size == sizeof(context.camera_address)) {
+        memcpy(&context.camera_address, stored_address,
+               sizeof(context.camera_address));
+        context.paired = true;
+        const esp_err_t migration_result = save_camera_address();
+        if (migration_result != ESP_OK) {
+            ESP_LOGW(TAG, "Could not migrate saved camera address: %s",
+                     esp_err_to_name(migration_result));
+        }
+        return ESP_OK;
+    }
+    return ESP_ERR_INVALID_SIZE;
 }
 
 static esp_err_t save_camera_address(void)
@@ -150,9 +166,14 @@ static esp_err_t save_camera_address(void)
     if (result != ESP_OK) {
         return result;
     }
-    result = nvs_set_blob(handle, CANON_NVS_ADDRESS_KEY,
-                          &context.camera_address,
-                          sizeof(context.camera_address));
+    uint8_t record[CANON_PEER_RECORD_SIZE];
+    if (!canon_peer_record_encode(context.camera_address.type,
+                                  context.camera_address.val, record)) {
+        nvs_close(handle);
+        return ESP_ERR_INVALID_ARG;
+    }
+    result = nvs_set_blob(handle, CANON_NVS_ADDRESS_KEY, record,
+                          sizeof(record));
     if (result == ESP_OK) {
         result = nvs_commit(handle);
     }
@@ -635,12 +656,17 @@ esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
         result = discover_characteristic(&CANON_PAIRING_UUID.u,
                                          &pairing_handle);
     }
+    canon_packet_t payload;
     if (result == ESP_OK) {
-        uint8_t payload[sizeof(CANON_REMOTE_NAME) + 1U] = {0x03U};
-        memcpy(&payload[1], CANON_REMOTE_NAME, sizeof(CANON_REMOTE_NAME));
+        if (!canon_protocol_make_pairing_packet(CANON_REMOTE_NAME,
+                                                &payload)) {
+            result = ESP_ERR_INVALID_ARG;
+        }
+    }
+    if (result == ESP_OK) {
         const int write_result = ble_gattc_write_no_rsp_flat(
-            context.connection_handle, pairing_handle, payload,
-            sizeof(payload));
+            context.connection_handle, pairing_handle, payload.data,
+            payload.length);
         result = result_from_ble_error(write_result);
     }
     if (result == ESP_OK) {
@@ -736,7 +762,7 @@ esp_err_t canon_ble_service_forget(void)
     return result;
 }
 
-static esp_err_t send_button_command(uint8_t pressed_value)
+static esp_err_t send_button_command(canon_button_t button)
 {
     if (!context.initialized || !context.host_synced) {
         return ESP_ERR_INVALID_STATE;
@@ -748,6 +774,7 @@ static esp_err_t send_button_command(uint8_t pressed_value)
     context.last_ble_error = 0;
     esp_err_t result = connect_for_control();
     if (result == ESP_OK) {
+        const uint8_t pressed_value = canon_protocol_button_press(button);
         const int press_result = ble_gattc_write_no_rsp_flat(
             context.connection_handle, context.discovered_value_handle,
             &pressed_value, sizeof(pressed_value));
@@ -755,7 +782,7 @@ static esp_err_t send_button_command(uint8_t pressed_value)
     }
     if (result == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(200U));
-        const uint8_t release_value = CANON_MODE_IMMEDIATE;
+        const uint8_t release_value = canon_protocol_button_release();
         const int release_result = ble_gattc_write_no_rsp_flat(
             context.connection_handle, context.discovered_value_handle,
             &release_value, sizeof(release_value));
@@ -769,14 +796,12 @@ static esp_err_t send_button_command(uint8_t pressed_value)
 
 esp_err_t canon_ble_service_shutter(void)
 {
-    return send_button_command(CANON_MODE_IMMEDIATE |
-                               CANON_BUTTON_RELEASE);
+    return send_button_command(CANON_BUTTON_SHUTTER);
 }
 
 esp_err_t canon_ble_service_focus(void)
 {
-    return send_button_command(CANON_MODE_IMMEDIATE |
-                               CANON_BUTTON_FOCUS);
+    return send_button_command(CANON_BUTTON_FOCUS);
 }
 
 void canon_ble_service_get_status(canon_ble_status_t *status)

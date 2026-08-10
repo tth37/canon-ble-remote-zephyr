@@ -1,55 +1,96 @@
-# ESP32-C6 serial connectivity shell
+# Multi-target wireless serial services
 
-An extensible ESP-IDF command shell for experimenting with the Wi-Fi,
-Bluetooth LE, and system features of an ESP32-C6-DevKitC-1. This branch
-intentionally has no display or joystick dependencies. Communication uses the
-board's USB-to-UART bridge at 115200 baud.
+One repository now builds the serial command firmware for two microcontroller
+targets:
 
-The firmware uses ESP-IDF's `esp_console` REPL with line editing, command
-completion, and argument splitting. History is kept to one in-memory entry;
-credential-bearing `wifi join` commands immediately evict themselves and
-history is never saved to flash.
+| Target | SDK/backend | Available services | Validation |
+|---|---|---|---|
+| `esp32c6` | ESP-IDF 6 / NimBLE | system, Wi-Fi, Canon BLE remote | Build and on-board UART tested |
+| `ch582m` | WCH CH58x SDK / TMOS BLE | system, Canon BLE remote | Build and link tested; hardware test pending |
 
-## Build, upload, and connect
+The display and joystick demos remain on their existing branches. This branch
+has no display or joystick dependency; both targets communicate over a
+115200-baud serial shell.
 
-The Python and PlatformIO tools remain local to this repository:
+## Select a target
+
+The root Makefile reads the active target from the ignored `.target` file. If
+that file is absent, the safe default is `esp32c6`.
 
 ```sh
-make setup
+make select TARGET=esp32c6
 make build
 make upload
 make serial
 ```
 
-The configured serial device is `/dev/cu.usbserial-310`. `make serial` runs
-`tools/c6_serial.py`, an interactive pyserial terminal with the correct port,
-baud rate, control-line, and `CR` line-ending defaults. The `CR` setting avoids
-submitting two empty commands for one Enter key, while received `CRLF` lines are
-preserved to avoid double-spaced output. Press Enter if the `c6>` prompt is not
-immediately visible. Exit with `Ctrl+]`.
-
-Override the defaults when necessary:
+Switch once, then keep using the ordinary commands:
 
 ```sh
-make serial ARGS="/dev/cu.usbserial-OTHER 115200"
-# or
-C6_SERIAL_PORT=/dev/cu.usbserial-OTHER make serial
+make select TARGET=ch582m
+make build
 ```
 
-No external wiring is required. Displays and joysticks may remain disconnected.
+For CI or a one-off build, override the saved selection without changing it:
 
-## Commands
+```sh
+make build TARGET=esp32c6
+make build TARGET=ch582m
+```
+
+`make target` prints the effective selection and `make help` lists the common
+commands. Toolchains remain local to this repository under `.venv`,
+`.platformio`, and `.cache`; none are installed into the system Python.
+
+## Build and flash
+
+For ESP32-C6, PlatformIO drives ESP-IDF:
+
+```sh
+make select TARGET=esp32c6
+make setup
+make build
+make upload
+```
+
+The configured ESP32-C6 serial device is `/dev/cu.usbserial-310`. Override
+automatic selection when necessary:
+
+```sh
+SERIAL_PORT=/dev/cu.usbserial-OTHER make serial
+```
+
+For CH582M, setup sparsely fetches a pinned revision of the official
+`openwch/ch583` SDK, which also supports CH582M, and uses a repository-local
+RISC-V compiler, CMake, and Ninja. Build outputs are written to
+`.build/ch582m/` as ELF, Intel HEX, and raw binary files.
+
+```sh
+make select TARGET=ch582m
+make setup
+make build
+```
+
+CH582M flashing is intentionally left behind an explicit `wchisp` dependency
+until the board is available:
+
+```sh
+make upload                       # uses wchisp from PATH
+CH582M_FLASHER=/path/to/wchisp make upload
+```
+
+The CH582M shell uses UART1 at 115200 baud: PA9 is TX and PA8 is RX. The final
+USB serial port and bootloader procedure must be verified with the actual
+devkit.
+
+## Serial commands
+
+Both backends expose the same Canon command vocabulary:
 
 ```text
 help
 sysinfo
-heap
 reboot
-wifi help
-wifi scan [limit]
-wifi join <ssid> [password]
-wifi status
-wifi leave
 camera help
 camera pair [seconds]
 camera connect
@@ -60,80 +101,81 @@ camera disconnect
 camera forget
 ```
 
-Examples:
+ESP32-C6 additionally provides:
 
 ```text
-c6> wifi scan 10
-c6> wifi join "My Network" "correct horse battery staple"
-c6> wifi status
-c6> wifi leave
+heap
+wifi help
+wifi scan [limit]
+wifi join <ssid> [password]
+wifi status
+wifi leave
 ```
 
-Quote values containing spaces. Credentials are passed to the ESP-IDF Wi-Fi
-driver using `WIFI_STORAGE_RAM`; they are not compiled into the firmware or
-written to NVS. `wifi leave` also clears the in-memory station configuration.
-The password is still visible while typed in the terminal, so use the serial
-shell only in a trusted local environment.
+`make serial` runs `tools/serial_terminal.py`. It transmits one carriage return
+for Enter and preserves received CRLF, avoiding both duplicate prompts and
+double-spaced output. Exit with `Ctrl+]`.
+
+Wi-Fi credentials on ESP32-C6 use `WIFI_STORAGE_RAM`; they are not compiled
+into the firmware or written to NVS. They remain visible while typed, so use
+the serial shell only in a trusted environment.
 
 ## Canon BLE remote
 
-The `camera` service is a native ESP-IDF/NimBLE port of the protocol used by
+The Canon service is a native port of the protocol used by
 [maxmacstn/ESP32-Canon-BLE-Remote](https://github.com/maxmacstn/ESP32-Canon-BLE-Remote).
-It does not depend on Arduino, Arduino BLE, or ArduinoNvs. The saved camera
-address and NimBLE bond survive a reboot in NVS.
+Neither target depends on Arduino. Shared C11 code owns the Canon UUIDs,
+pairing/control packets, and stable saved-peer record; each firmware target
+owns its BLE lifecycle, bond store, scheduler, and serial integration.
 
 To pair:
 
 1. On the camera, open **Wireless Communication Settings > Bluetooth Function
-   > Remote > Pairing**. The exact menu name varies by Canon model.
+   > Remote > Pairing**. Exact menu names vary by model.
 2. Run `camera pair 20` while that screen is open.
-3. Accept or finish the pairing prompt on the camera if it asks.
-4. Run `camera status`, then try `camera shutter` or `camera focus`.
+3. Finish any camera-side pairing prompt.
+4. Run `camera status`, then `camera shutter` or `camera focus`.
 
-After the initial pairing, control commands reconnect automatically when
-needed. `camera disconnect` keeps the bond but closes the current connection;
-`camera forget` removes both the saved address and the corresponding NimBLE
-bond. If either side has stale pairing information, forget/delete the remote
-on both devices and pair again.
+The address record is portable, but vendor bond databases are not. Switching
+physical boards therefore requires pairing that board once. `camera forget`
+removes both its saved address and its backend-specific bond.
 
-The upstream project reports compatibility with the EOS M50. Canon models and
-camera firmware can differ, so pairing and shutter behavior must still be
-verified on the particular camera. For still photos, Canon may also require
-the remote/self-timer drive mode; for movies, enable remote control in the
-camera menu.
+The original project reports EOS M50 compatibility. Camera model and firmware
+behavior still need testing on the particular camera.
 
-## Source layout
+## Repository structure
 
-- `src/console_app.c`: UART REPL setup and command registration
-- `src/system_commands.c`: chip, heap, uptime, and reboot commands
-- `src/wifi_service.c`: Wi-Fi lifecycle, events, scanning, and station state
-- `src/wifi_commands.c`: serial command parsing and formatted output
-- `src/canon_ble_service.c`: Canon discovery, pairing, bonding, and controls
-- `src/canon_ble_commands.c`: `camera` command parsing and status output
-- `third_party/esp32-canon-ble-remote/`: upstream attribution and MIT license
+```text
+firmware/
+  esp32c6/             ESP-IDF project and NimBLE/Wi-Fi services
+  ch582m/              WCH CMake project, TMOS BLE service, UART shell
+shared/canon/           vendor-neutral protocol and peer record code
+tests/host/             native tests for shared code
+third_party/            upstream attribution and SDK provenance
+tools/                  target-neutral serial and SDK setup helpers
+```
 
-New features should expose a small service API and register their shell
-commands in a separate module. Long-lived state belongs in the service rather
-than in a command handler.
+See [docs/architecture.md](docs/architecture.md) for the backend boundary and
+steps for adding another MCU. Run the portable tests with `make test`.
 
 ## VS Code, clangd, and IntelliSense
 
-The checked-in `.vscode` configuration points clangd and Microsoft C/C++
-IntelliSense at PlatformIO's RISC-V compiler and compilation database. Generate
-or refresh that database after changing build configuration:
+Select the target, then generate that target's compilation database:
 
 ```sh
 make compile-commands
 ```
 
-VS Code tasks are included for building, refreshing the database, and opening
-the serial terminal. Both clangd and Microsoft C/C++ extensions are recommended;
-enable only one diagnostics engine if duplicate diagnostics appear.
+The command points root `compile_commands.json` at the selected backend. The
+checked-in VS Code configuration uses the repository-local RISC-V toolchain;
+tasks are included for selection, build, upload, tests, database refresh, and
+serial. Enable only clangd or Microsoft C/C++ diagnostics if duplicate messages
+appear.
 
 ## Demo branches
 
 ```sh
-git switch main       # serial Wi-Fi and Canon BLE command shell
+git switch main       # tested ESP32-C6 serial services
 git switch dual-rift  # dual-screen twin-stick Rift Runner
 git switch arduboy    # Arduboy2 sprite port and playground
 git switch renderer   # joystick-controlled 3D renderer

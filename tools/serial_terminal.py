@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open an interactive serial terminal for the ESP32-C6 UART console."""
+"""Open an interactive serial terminal for the selected firmware target."""
 
 from __future__ import annotations
 
@@ -11,9 +11,16 @@ from serial.tools import list_ports
 from serial.tools import miniterm
 
 
-PREFERRED_PORT = "/dev/cu.usbserial-310"
-DEFAULT_BAUD = int(os.environ.get("C6_SERIAL_BAUD", "115200"))
-DEFAULT_EOL = os.environ.get("C6_SERIAL_EOL", "CR").upper()
+TARGET = os.environ.get("SERIAL_TARGET", "esp32c6")
+PREFERRED_PORT = "/dev/cu.usbserial-310" if TARGET == "esp32c6" else ""
+DEFAULT_BAUD = int(
+    os.environ.get(
+        "SERIAL_BAUD", os.environ.get("C6_SERIAL_BAUD", "115200")
+    )
+)
+DEFAULT_EOL = os.environ.get(
+    "SERIAL_EOL", os.environ.get("C6_SERIAL_EOL", "CR")
+).upper()
 
 
 class TransmitCR(miniterm.Transform):
@@ -25,11 +32,15 @@ class TransmitCR(miniterm.Transform):
 
 def find_default_port() -> str:
     """Choose an explicit, known, or uniquely identifiable USB serial port."""
-    configured_port = os.environ.get("C6_SERIAL_PORT")
+    configured_port = (
+        os.environ.get("SERIAL_PORT")
+        or os.environ.get(f"{TARGET.upper()}_SERIAL_PORT")
+        or os.environ.get("C6_SERIAL_PORT")
+    )
     if configured_port:
         return configured_port
 
-    if Path(PREFERRED_PORT).exists():
+    if PREFERRED_PORT and Path(PREFERRED_PORT).exists():
         return PREFERRED_PORT
 
     usb_ports = [
@@ -46,7 +57,7 @@ def find_default_port() -> str:
     if len(usb_ports) == 1:
         return usb_ports[0]
 
-    return PREFERRED_PORT
+    return PREFERRED_PORT or "/dev/cu.usbserial-CH582M"
 
 
 def apply_terminal_defaults(arguments: list[str]) -> list[str]:
