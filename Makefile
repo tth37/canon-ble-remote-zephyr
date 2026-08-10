@@ -8,18 +8,14 @@ export IDF_COMPONENT_MANAGER
 
 PLATFORMIO := .venv/bin/pio
 PYTHON := .venv/bin/python
-BLESS_PACKAGE := .venv/lib/python3.13/site-packages/bless/__init__.py
 
-.PHONY: setup build upload monitor serial mock-camera compile-commands clean
+.PHONY: setup build upload monitor serial compile-commands clean
 
-setup: $(PLATFORMIO) $(BLESS_PACKAGE)
+setup: $(PLATFORMIO)
 
 $(PLATFORMIO):
 	uv venv --python 3.13 .venv
 	uv pip install --python .venv/bin/python pip platformio==6.1.18 pyserial==3.5
-
-$(BLESS_PACKAGE): $(PLATFORMIO)
-	uv pip install --python .venv/bin/python bless==0.3.0
 
 build: setup
 	$(PLATFORMIO) run
@@ -32,9 +28,6 @@ monitor: setup
 
 serial: setup
 	$(PYTHON) tools/c6_serial.py $(ARGS)
-
-mock-camera: setup
-	$(PYTHON) tools/mock_canon_camera.py $(ARGS)
 
 compile-commands: setup
 	$(PLATFORMIO) run --target compiledb

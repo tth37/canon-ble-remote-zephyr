@@ -63,7 +63,6 @@ typedef struct {
     volatile bool encrypted;
     volatile bool ready;
     volatile bool scanning;
-    volatile bool mock_mode;
     volatile bool disconnect_requested;
     uint8_t own_address_type;
     ble_addr_t camera_address;
@@ -362,8 +361,7 @@ static esp_err_t connect_for_control(void)
     if (!context.paired) {
         return ESP_ERR_NOT_FOUND;
     }
-    if (context.ready && context.connected &&
-        (context.encrypted || context.mock_mode)) {
+    if (context.ready && context.connected && context.encrypted) {
         return ESP_OK;
     }
     if (context.connected) {
@@ -377,12 +375,10 @@ static esp_err_t connect_for_control(void)
     if (result != ESP_OK) {
         return result;
     }
-    if (!context.mock_mode) {
-        result = secure_link();
-        if (result != ESP_OK) {
-            disconnect_after_failure();
-            return result;
-        }
+    result = secure_link();
+    if (result != ESP_OK) {
+        disconnect_after_failure();
+        return result;
     }
     result = discover_service();
     if (result != ESP_OK) {
@@ -611,7 +607,7 @@ esp_err_t canon_ble_service_initialize(void)
     return wait_for_event(EVENT_HOST_SYNCED, HOST_SYNC_TIMEOUT_MS);
 }
 
-static esp_err_t pair_camera(uint32_t scan_seconds, bool mock_mode)
+esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
 {
     if (!context.initialized || !context.host_synced) {
         return ESP_ERR_INVALID_STATE;
@@ -647,7 +643,7 @@ static esp_err_t pair_camera(uint32_t scan_seconds, bool mock_mode)
             sizeof(payload));
         result = result_from_ble_error(write_result);
     }
-    if (result == ESP_OK && !mock_mode) {
+    if (result == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(250U));
         result = secure_link();
     }
@@ -656,14 +652,8 @@ static esp_err_t pair_camera(uint32_t scan_seconds, bool mock_mode)
         const int find_result = ble_gap_conn_find(
             context.connection_handle, &description);
         if (find_result == 0) {
-            context.camera_address = mock_mode ? description.peer_ota_addr
-                                               : description.peer_id_addr;
-            context.mock_mode = mock_mode;
-            if (mock_mode) {
-                context.paired = true;
-            } else {
-                result = save_camera_address();
-            }
+            context.camera_address = description.peer_id_addr;
+            result = save_camera_address();
         } else {
             result = result_from_ble_error(find_result);
         }
@@ -685,16 +675,6 @@ static esp_err_t pair_camera(uint32_t scan_seconds, bool mock_mode)
 
     xSemaphoreGive(context.operation_mutex);
     return result;
-}
-
-esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
-{
-    return pair_camera(scan_seconds, false);
-}
-
-esp_err_t canon_ble_service_pair_mock(uint32_t scan_seconds)
-{
-    return pair_camera(scan_seconds, true);
 }
 
 esp_err_t canon_ble_service_connect(void)
@@ -749,7 +729,6 @@ esp_err_t canon_ble_service_forget(void)
     if (result == ESP_OK) {
         memset(&context.camera_address, 0, sizeof(context.camera_address));
         context.paired = false;
-        context.mock_mode = false;
         context.last_ble_error = 0;
     }
 
@@ -813,7 +792,6 @@ void canon_ble_service_get_status(canon_ble_status_t *status)
     status->encrypted = context.encrypted;
     status->ready = context.ready;
     status->scanning = context.scanning;
-    status->mock_mode = context.mock_mode;
     status->last_ble_error = context.last_ble_error;
     if (context.paired) {
         format_address(&context.camera_address, status->camera_address);
