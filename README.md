@@ -5,7 +5,7 @@ application and one source set build for both supported boards:
 
 | Zephyr board target | Console | Validation |
 |---|---|---|
-| `esp32c6_devkitc/esp32c6/hpcore` | UART0, 115200 baud | Builds with Zephyr 4.2; hardware validation in progress |
+| `esp32c6_devkitc/esp32c6/hpcore` | UART0, 115200 baud | Built, flashed, and tested with a Canon 200D II |
 | `promicro_nrf52840/nrf52840/uf2` | native USB CDC | Builds and produces UF2; hardware validation pending |
 
 The proven PlatformIO/ESP-IDF/NimBLE ESP32-C6 implementation remains on the
@@ -118,6 +118,18 @@ second encrypted connection for camera control.
 
 `camera forget` removes both the portable peer record and Zephyr's bond. Bond
 databases are board-local, so each physical board must pair once.
+
+The ESP32-C6 hardware test covers initial pairing, encrypted control setup,
+bond persistence across resets, power-cycle reconnect, focus, shutter,
+explicit disconnect, and reconnect. The working bond was deliberately kept;
+`camera forget` is exercised only when the camera is meant to be paired again.
+
+Zephyr's ESP simple-boot image uses a RAM-only ROM header and intentionally has
+no appended SHA-256 digest because its flash-mapped segments follow the RAM
+image in the same binary. Early ESP32-C6 ROM revisions may therefore print
+`SHA-256 comparison failed` followed by `Attempting to boot anyway`. This is an
+expected simple-boot diagnostic; West still verifies the complete image while
+flashing, and Zephyr performs the remaining image setup after ROM handoff.
 
 The Canon protocol is a native C port of
 [maxmacstn/ESP32-Canon-BLE-Remote](https://github.com/maxmacstn/ESP32-Canon-BLE-Remote).
