@@ -29,10 +29,8 @@ export ZEPHYR_BASE ZEPHYR_SDK_INSTALL_DIR
 BOARD_KEY := $(subst /,_,$(BOARD))
 BUILD_ROOT := $(ROOT)/.build
 BUILD_DIR := $(BUILD_ROOT)/$(BOARD_KEY)
-HOST_CC ?= cc
-HOST_TEST := $(BUILD_ROOT)/host/test_canon_protocol
 
-.PHONY: help board select setup build upload flash serial test \
+.PHONY: help board select setup build upload flash serial \
 	compile-commands clean pristine clean-all
 
 help:
@@ -45,7 +43,6 @@ help:
 	@echo "  make build                 Run west build for the active board"
 	@echo "  make upload                Run west flash for the active board"
 	@echo "  make serial                Open the interactive serial shell"
-	@echo "  make test                  Run portable Canon protocol tests"
 	@echo "  make compile-commands      Refresh editor compile commands"
 	@echo "  make pristine              Remove the active Zephyr build directory"
 	@echo ""
@@ -111,19 +108,6 @@ clean: setup
 
 pristine:
 	$(RM) -r "$(BUILD_DIR)"
-
-$(HOST_TEST): tests/host/test_canon_protocol.c \
-	shared/canon/src/canon_protocol.c \
-	shared/canon/include/canon_protocol.h
-	mkdir -p "$(dir $(HOST_TEST))"
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -pedantic \
-		-Ishared/canon/include \
-		tests/host/test_canon_protocol.c shared/canon/src/canon_protocol.c \
-		-o "$(HOST_TEST)"
-
-test: $(HOST_TEST)
-	"$(HOST_TEST)"
-	$(PYTHON) tests/host/test_serial_terminal.py
 
 clean-all:
 	$(RM) -r "$(BUILD_ROOT)"

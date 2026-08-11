@@ -7,28 +7,28 @@
 #include <zephyr/sys/reboot.h>
 #include <zephyr/version.h>
 
-#include "canon_ble_zephyr.h"
+#include "canon/remote.h"
 
 #define DEFAULT_SCAN_SECONDS 15U
 #define MAX_SCAN_SECONDS 60U
 
 static int print_result(const struct shell *shell, const char *operation,
-                        canon_zephyr_result_t result)
+                        canon_remote_result_t result)
 {
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         shell_print(shell, "%s succeeded", operation);
         return 0;
     }
 
-    canon_zephyr_status_t status;
-    canon_ble_zephyr_get_status(&status);
+    canon_remote_status_t status;
+    canon_remote_get_status(&status);
     if (status.last_ble_error != 0) {
         shell_error(shell, "%s failed: %s (Zephyr BLE error %d)",
-                    operation, canon_ble_zephyr_result_name(result),
+                    operation, canon_remote_result_name(result),
                     status.last_ble_error);
     } else {
         shell_error(shell, "%s failed: %s", operation,
-                    canon_ble_zephyr_result_name(result));
+                    canon_remote_result_name(result));
     }
     return -ENOEXEC;
 }
@@ -60,7 +60,7 @@ static int command_camera_pair(const struct shell *shell, size_t argc,
     shell_print(shell, "Scanning for the Canon service for %u seconds...",
                 seconds);
     return print_result(shell, "Pairing",
-                        canon_ble_zephyr_pair(seconds));
+                        canon_remote_pair(seconds));
 }
 
 static int command_camera_connect(const struct shell *shell, size_t argc,
@@ -68,7 +68,7 @@ static int command_camera_connect(const struct shell *shell, size_t argc,
 {
     (void)argc;
     (void)argv;
-    return print_result(shell, "Connection", canon_ble_zephyr_connect());
+    return print_result(shell, "Connection", canon_remote_connect());
 }
 
 static int command_camera_shutter(const struct shell *shell, size_t argc,
@@ -76,7 +76,7 @@ static int command_camera_shutter(const struct shell *shell, size_t argc,
 {
     (void)argc;
     (void)argv;
-    return print_result(shell, "Shutter", canon_ble_zephyr_shutter());
+    return print_result(shell, "Shutter", canon_remote_shutter());
 }
 
 static int command_camera_focus(const struct shell *shell, size_t argc,
@@ -84,7 +84,7 @@ static int command_camera_focus(const struct shell *shell, size_t argc,
 {
     (void)argc;
     (void)argv;
-    return print_result(shell, "Focus", canon_ble_zephyr_focus());
+    return print_result(shell, "Focus", canon_remote_focus());
 }
 
 static int command_camera_status(const struct shell *shell, size_t argc,
@@ -93,8 +93,8 @@ static int command_camera_status(const struct shell *shell, size_t argc,
     (void)argc;
     (void)argv;
 
-    canon_zephyr_status_t status;
-    canon_ble_zephyr_get_status(&status);
+    canon_remote_status_t status;
+    canon_remote_get_status(&status);
     shell_print(shell, "BLE service: %s",
                 status.initialized ? "initialized" : "unavailable");
     shell_print(shell, "BLE host:    %s",
@@ -124,7 +124,7 @@ static int command_camera_disconnect(const struct shell *shell, size_t argc,
     (void)argc;
     (void)argv;
     return print_result(shell, "Disconnect",
-                        canon_ble_zephyr_disconnect());
+                        canon_remote_disconnect());
 }
 
 static int command_camera_forget(const struct shell *shell, size_t argc,
@@ -132,7 +132,7 @@ static int command_camera_forget(const struct shell *shell, size_t argc,
 {
     (void)argc;
     (void)argv;
-    return print_result(shell, "Forget", canon_ble_zephyr_forget());
+    return print_result(shell, "Forget", canon_remote_forget());
 }
 
 static int command_camera_help(const struct shell *shell, size_t argc,

@@ -6,7 +6,6 @@
       "includePath": [
         "${workspaceFolder}/firmware/src/**",
         "${workspaceFolder}/.build/**/zephyr/include/generated/**",
-        "${workspaceFolder}/shared/canon/include/**",
         "${workspaceFolder}/.zephyr/zephyr/include/**",
         "${workspaceFolder}/.zephyr/modules/**"
       ],

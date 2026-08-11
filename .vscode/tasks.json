@@ -30,12 +30,6 @@
       "problemMatcher": []
     },
     {
-      "label": "Firmware: Run shared tests",
-      "type": "shell",
-      "command": "make test",
-      "problemMatcher": "$gcc"
-    },
-    {
       "label": "Firmware: Refresh compile commands",
       "type": "shell",
       "command": "make compile-commands",

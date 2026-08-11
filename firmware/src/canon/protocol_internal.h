@@ -1,5 +1,5 @@
-#ifndef CANON_PROTOCOL_H
-#define CANON_PROTOCOL_H
+#ifndef CANON_PROTOCOL_INTERNAL_H
+#define CANON_PROTOCOL_INTERNAL_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -31,10 +31,6 @@ typedef struct {
     uint8_t data[CANON_PACKET_MAX_SIZE];
     uint8_t length;
 } canon_packet_t;
-
-extern const uint8_t canon_service_uuid_le[CANON_UUID_SIZE];
-extern const uint8_t canon_pairing_uuid_le[CANON_UUID_SIZE];
-extern const uint8_t canon_trigger_uuid_le[CANON_UUID_SIZE];
 
 bool canon_protocol_make_pairing_packet(const char *remote_name,
                                         canon_packet_t *packet);

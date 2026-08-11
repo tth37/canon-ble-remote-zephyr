@@ -1,4 +1,4 @@
-#include "canon_protocol.h"
+#include "protocol_internal.h"
 
 #include <string.h>
 
@@ -7,16 +7,6 @@
 #define CANON_CONTROL_SHUTTER 0x80U
 #define CANON_CONTROL_FOCUS 0x40U
 #define CANON_PEER_RECORD_VERSION 1U
-
-const uint8_t canon_service_uuid_le[CANON_UUID_SIZE] = {
-    CANON_SERVICE_UUID_LE_BYTES,
-};
-const uint8_t canon_pairing_uuid_le[CANON_UUID_SIZE] = {
-    CANON_PAIRING_UUID_LE_BYTES,
-};
-const uint8_t canon_trigger_uuid_le[CANON_UUID_SIZE] = {
-    CANON_TRIGGER_UUID_LE_BYTES,
-};
 
 static size_t bounded_string_length(const char *text, size_t limit)
 {

@@ -1,4 +1,4 @@
-#include "canon_ble_zephyr.h"
+#include "remote.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -17,9 +17,9 @@
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
 
-#include "canon_protocol.h"
+#include "protocol_internal.h"
 
-LOG_MODULE_REGISTER(canon_ble, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(canon_remote, LOG_LEVEL_INF);
 
 #define CANON_REMOTE_NAME "ESP32 Remote"
 #define CANON_SETTINGS_PEER_KEY "canon/peer"
@@ -90,35 +90,35 @@ typedef struct {
     uint16_t discovered_value_handle;
     int operation_result;
     int last_ble_error;
-} canon_ble_context_t;
+} canon_remote_context_t;
 
-static canon_ble_context_t context;
+static canon_remote_context_t context;
 
-static canon_zephyr_result_t result_from_error(int error)
+static canon_remote_result_t result_from_error(int error)
 {
     if (error == 0) {
         context.last_ble_error = 0;
-        return CANON_ZEPHYR_OK;
+        return CANON_REMOTE_OK;
     }
     if (context.last_ble_error == 0) {
         context.last_ble_error = error;
     }
     if (error == -EBUSY || error == -EALREADY) {
-        return CANON_ZEPHYR_BUSY;
+        return CANON_REMOTE_BUSY;
     }
     if (error == -ENOENT) {
-        return CANON_ZEPHYR_NOT_FOUND;
+        return CANON_REMOTE_NOT_FOUND;
     }
     if (error == -ETIMEDOUT) {
-        return CANON_ZEPHYR_TIMEOUT;
+        return CANON_REMOTE_TIMEOUT;
     }
     if (error == -EINVAL) {
-        return CANON_ZEPHYR_INVALID_ARGUMENT;
+        return CANON_REMOTE_INVALID_ARGUMENT;
     }
-    return CANON_ZEPHYR_STACK_ERROR;
+    return CANON_REMOTE_STACK_ERROR;
 }
 
-static canon_zephyr_result_t wait_for_operation(struct k_sem *semaphore,
+static canon_remote_result_t wait_for_operation(struct k_sem *semaphore,
                                                 k_timeout_t timeout)
 {
     if (k_sem_take(semaphore, timeout) != 0) {
@@ -343,7 +343,7 @@ static uint8_t discovery_completed(
     return BT_GATT_ITER_STOP;
 }
 
-static canon_zephyr_result_t discover_service(void)
+static canon_remote_result_t discover_service(void)
 {
     context.service_start_handle = 0U;
     context.service_end_handle = 0U;
@@ -366,7 +366,7 @@ static canon_zephyr_result_t discover_service(void)
                               K_SECONDS(GATT_TIMEOUT_SECONDS));
 }
 
-static canon_zephyr_result_t discover_characteristic(
+static canon_remote_result_t discover_characteristic(
     const struct bt_uuid *uuid, uint16_t *value_handle)
 {
     context.discovered_value_handle = 0U;
@@ -387,21 +387,21 @@ static canon_zephyr_result_t discover_characteristic(
         return result_from_error(result);
     }
 
-    const canon_zephyr_result_t wait_result = wait_for_operation(
+    const canon_remote_result_t wait_result = wait_for_operation(
         &context.discovery_sem, K_SECONDS(GATT_TIMEOUT_SECONDS));
-    if (wait_result == CANON_ZEPHYR_OK) {
+    if (wait_result == CANON_REMOTE_OK) {
         *value_handle = context.discovered_value_handle;
     }
     return wait_result;
 }
 
-static canon_zephyr_result_t disconnect_link(void)
+static canon_remote_result_t disconnect_link(void)
 {
     if (context.connection == NULL || !atomic_get(&context.connected)) {
         atomic_set(&context.connected, 0);
         atomic_set(&context.encrypted, 0);
         atomic_set(&context.ready, 0);
-        return CANON_ZEPHYR_OK;
+        return CANON_REMOTE_OK;
     }
 
     context.operation_result = 0;
@@ -417,14 +417,14 @@ static canon_zephyr_result_t disconnect_link(void)
         atomic_set(&context.connected, 0);
         atomic_set(&context.encrypted, 0);
         atomic_set(&context.ready, 0);
-        return CANON_ZEPHYR_OK;
+        return CANON_REMOTE_OK;
     }
     if (result != 0) {
         atomic_set(&context.disconnect_requested, 0);
         return result_from_error(result);
     }
 
-    const canon_zephyr_result_t wait_result = wait_for_operation(
+    const canon_remote_result_t wait_result = wait_for_operation(
         &context.disconnected_sem, K_SECONDS(DISCONNECT_TIMEOUT_SECONDS));
     atomic_set(&context.disconnect_requested, 0);
     return wait_result;
@@ -437,7 +437,7 @@ static void disconnect_after_failure(void)
     context.last_ble_error = failed_error;
 }
 
-static canon_zephyr_result_t connect_link(const bt_addr_le_t *address,
+static canon_remote_result_t connect_link(const bt_addr_le_t *address,
                                           bool force_pair)
 {
     context.operation_result = 0;
@@ -458,15 +458,15 @@ static canon_zephyr_result_t connect_link(const bt_addr_le_t *address,
         return result_from_error(result);
     }
 
-    const canon_zephyr_result_t wait_result = wait_for_operation(
+    const canon_remote_result_t wait_result = wait_for_operation(
         &context.connected_sem, K_SECONDS(CONNECT_TIMEOUT_SECONDS));
-    if (wait_result != CANON_ZEPHYR_OK) {
+    if (wait_result != CANON_REMOTE_OK) {
         return wait_result;
     }
-    return CANON_ZEPHYR_OK;
+    return CANON_REMOTE_OK;
 }
 
-static canon_zephyr_result_t secure_link(void)
+static canon_remote_result_t secure_link(void)
 {
     if (context.connection == NULL) {
         return result_from_error(-ENOTCONN);
@@ -474,17 +474,17 @@ static canon_zephyr_result_t secure_link(void)
     if (bt_conn_get_security(context.connection) >= BT_SECURITY_L2) {
         atomic_set(&context.encrypted, 1);
         context.last_ble_error = 0;
-        return CANON_ZEPHYR_OK;
+        return CANON_REMOTE_OK;
     }
 
-    const canon_zephyr_result_t result = wait_for_operation(
+    const canon_remote_result_t result = wait_for_operation(
         &context.security_sem, K_SECONDS(SECURITY_TIMEOUT_SECONDS));
     atomic_set(&context.secure_on_connect, 0);
     atomic_set(&context.force_pair_on_connect, 0);
     return result;
 }
 
-static canon_zephyr_result_t scan_for_camera(uint32_t scan_seconds)
+static canon_remote_result_t scan_for_camera(uint32_t scan_seconds)
 {
     context.operation_result = 0;
     context.last_ble_error = 0;
@@ -507,63 +507,63 @@ static canon_zephyr_result_t scan_for_camera(uint32_t scan_seconds)
         return result_from_error(stop_result);
     }
     if (wait_result == 0 && atomic_get(&context.scan_found)) {
-        return CANON_ZEPHYR_OK;
+        return CANON_REMOTE_OK;
     }
     return result_from_error(-ENOENT);
 }
 
-static canon_zephyr_result_t connect_for_control(void)
+static canon_remote_result_t connect_for_control(void)
 {
     if (!atomic_get(&context.paired)) {
-        return CANON_ZEPHYR_NOT_PAIRED;
+        return CANON_REMOTE_NOT_PAIRED;
     }
     if (atomic_get(&context.ready) && atomic_get(&context.connected) &&
         atomic_get(&context.encrypted)) {
-        return CANON_ZEPHYR_OK;
+        return CANON_REMOTE_OK;
     }
     if (atomic_get(&context.connected)) {
-        const canon_zephyr_result_t disconnect_result = disconnect_link();
-        if (disconnect_result != CANON_ZEPHYR_OK) {
+        const canon_remote_result_t disconnect_result = disconnect_link();
+        if (disconnect_result != CANON_REMOTE_OK) {
             return disconnect_result;
         }
     }
 
-    canon_zephyr_result_t result = connect_link(
+    canon_remote_result_t result = connect_link(
         &context.camera_address, false);
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         result = secure_link();
     }
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         result = discover_service();
     }
 
     uint16_t trigger_handle = 0U;
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         result = discover_characteristic(&canon_trigger_uuid.uuid,
                                          &trigger_handle);
     }
-    if (result != CANON_ZEPHYR_OK) {
+    if (result != CANON_REMOTE_OK) {
         disconnect_after_failure();
         return result;
     }
 
     context.discovered_value_handle = trigger_handle;
     atomic_set(&context.ready, 1);
-    return CANON_ZEPHYR_OK;
+    return CANON_REMOTE_OK;
 }
 
-static canon_zephyr_result_t begin_operation(void)
+static canon_remote_result_t begin_operation(void)
 {
     if (!atomic_get(&context.initialized) ||
         !atomic_get(&context.host_ready)) {
-        return CANON_ZEPHYR_NOT_READY;
+        return CANON_REMOTE_NOT_READY;
     }
     if (k_mutex_lock(&context.operation_mutex, K_NO_WAIT) != 0) {
-        return CANON_ZEPHYR_BUSY;
+        return CANON_REMOTE_BUSY;
     }
     atomic_set(&context.busy, 1);
     context.last_ble_error = 0;
-    return CANON_ZEPHYR_OK;
+    return CANON_REMOTE_OK;
 }
 
 static void finish_operation(void)
@@ -572,10 +572,10 @@ static void finish_operation(void)
     k_mutex_unlock(&context.operation_mutex);
 }
 
-canon_zephyr_result_t canon_ble_zephyr_initialize(void)
+canon_remote_result_t canon_remote_initialize(void)
 {
     if (atomic_get(&context.initialized)) {
-        return CANON_ZEPHYR_OK;
+        return CANON_REMOTE_OK;
     }
 
     k_mutex_init(&context.operation_mutex);
@@ -599,17 +599,17 @@ canon_zephyr_result_t canon_ble_zephyr_initialize(void)
     atomic_set(&context.host_ready, 1);
     atomic_set(&context.initialized, 1);
     context.last_ble_error = 0;
-    return CANON_ZEPHYR_OK;
+    return CANON_REMOTE_OK;
 }
 
-canon_zephyr_result_t canon_ble_zephyr_pair(uint32_t scan_seconds)
+canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
 {
     if (scan_seconds == 0U || scan_seconds > 60U) {
-        return CANON_ZEPHYR_INVALID_ARGUMENT;
+        return CANON_REMOTE_INVALID_ARGUMENT;
     }
 
-    canon_zephyr_result_t result = begin_operation();
-    if (result != CANON_ZEPHYR_OK) {
+    canon_remote_result_t result = begin_operation();
+    if (result != CANON_REMOTE_OK) {
         return result;
     }
 
@@ -621,10 +621,10 @@ canon_zephyr_result_t canon_ble_zephyr_pair(uint32_t scan_seconds)
     }
 
     result = disconnect_link();
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         result = scan_for_camera(scan_seconds);
     }
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         const int unpair_result = bt_unpair(BT_ID_DEFAULT,
                                             &context.scan_address);
         if (unpair_result != 0 && unpair_result != -ENOENT) {
@@ -633,31 +633,31 @@ canon_zephyr_result_t canon_ble_zephyr_pair(uint32_t scan_seconds)
         }
         result = connect_link(&context.scan_address, true);
     }
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         result = secure_link();
     }
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         result = discover_service();
     }
 
     uint16_t pairing_handle = 0U;
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         result = discover_characteristic(&canon_pairing_uuid.uuid,
                                          &pairing_handle);
     }
 
     canon_packet_t packet;
-    if (result == CANON_ZEPHYR_OK &&
+    if (result == CANON_REMOTE_OK &&
         !canon_protocol_make_pairing_packet(CANON_REMOTE_NAME, &packet)) {
-        result = CANON_ZEPHYR_INVALID_ARGUMENT;
+        result = CANON_REMOTE_INVALID_ARGUMENT;
     }
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         result = result_from_error(bt_gatt_write_without_response(
             context.connection, pairing_handle, packet.data,
             packet.length, false));
     }
 
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         struct bt_conn_info connection_info;
         const int info_result = bt_conn_get_info(
             context.connection, &connection_info);
@@ -670,7 +670,7 @@ canon_zephyr_result_t canon_ble_zephyr_pair(uint32_t scan_seconds)
         }
     }
 
-    if (result == CANON_ZEPHYR_OK && had_previous_camera &&
+    if (result == CANON_REMOTE_OK && had_previous_camera &&
         bt_addr_le_cmp(&previous_camera_address,
                        &context.camera_address) != 0) {
         const int old_unpair_result = bt_unpair(
@@ -681,16 +681,16 @@ canon_zephyr_result_t canon_ble_zephyr_pair(uint32_t scan_seconds)
         }
     }
 
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         k_msleep(PAIRING_BOND_SETTLE_MS);
-        const canon_zephyr_result_t disconnect_result = disconnect_link();
-        if (disconnect_result == CANON_ZEPHYR_OK) {
+        const canon_remote_result_t disconnect_result = disconnect_link();
+        if (disconnect_result == CANON_REMOTE_OK) {
             k_msleep(PAIRING_RECONNECT_DELAY_MS);
-            const canon_zephyr_result_t reconnect_result =
+            const canon_remote_result_t reconnect_result =
                 connect_for_control();
-            if (reconnect_result != CANON_ZEPHYR_OK) {
+            if (reconnect_result != CANON_REMOTE_OK) {
                 LOG_WRN("Paired, but reconnect failed: %s (BLE %d)",
-                        canon_ble_zephyr_result_name(reconnect_result),
+                        canon_remote_result_name(reconnect_result),
                         context.last_ble_error);
             }
         }
@@ -702,10 +702,10 @@ canon_zephyr_result_t canon_ble_zephyr_pair(uint32_t scan_seconds)
     return result;
 }
 
-canon_zephyr_result_t canon_ble_zephyr_connect(void)
+canon_remote_result_t canon_remote_connect(void)
 {
-    canon_zephyr_result_t result = begin_operation();
-    if (result != CANON_ZEPHYR_OK) {
+    canon_remote_result_t result = begin_operation();
+    if (result != CANON_REMOTE_OK) {
         return result;
     }
     result = connect_for_control();
@@ -713,10 +713,10 @@ canon_zephyr_result_t canon_ble_zephyr_connect(void)
     return result;
 }
 
-canon_zephyr_result_t canon_ble_zephyr_disconnect(void)
+canon_remote_result_t canon_remote_disconnect(void)
 {
-    canon_zephyr_result_t result = begin_operation();
-    if (result != CANON_ZEPHYR_OK) {
+    canon_remote_result_t result = begin_operation();
+    if (result != CANON_REMOTE_OK) {
         return result;
     }
     result = disconnect_link();
@@ -724,28 +724,28 @@ canon_zephyr_result_t canon_ble_zephyr_disconnect(void)
     return result;
 }
 
-canon_zephyr_result_t canon_ble_zephyr_forget(void)
+canon_remote_result_t canon_remote_forget(void)
 {
-    canon_zephyr_result_t result = begin_operation();
-    if (result != CANON_ZEPHYR_OK) {
+    canon_remote_result_t result = begin_operation();
+    if (result != CANON_REMOTE_OK) {
         return result;
     }
 
     result = disconnect_link();
-    if (result == CANON_ZEPHYR_OK && atomic_get(&context.paired)) {
+    if (result == CANON_REMOTE_OK && atomic_get(&context.paired)) {
         const int unpair_result = bt_unpair(BT_ID_DEFAULT,
                                             &context.camera_address);
         if (unpair_result != 0 && unpair_result != -ENOENT) {
             result = result_from_error(unpair_result);
         }
     }
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         const int delete_result = settings_delete(CANON_SETTINGS_PEER_KEY);
         if (delete_result != 0 && delete_result != -ENOENT) {
             result = result_from_error(delete_result);
         }
     }
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         memset(&context.camera_address, 0,
                sizeof(context.camera_address));
         atomic_set(&context.paired, 0);
@@ -756,21 +756,21 @@ canon_zephyr_result_t canon_ble_zephyr_forget(void)
     return result;
 }
 
-static canon_zephyr_result_t send_button_command(canon_button_t button)
+static canon_remote_result_t send_button_command(canon_button_t button)
 {
-    canon_zephyr_result_t result = begin_operation();
-    if (result != CANON_ZEPHYR_OK) {
+    canon_remote_result_t result = begin_operation();
+    if (result != CANON_REMOTE_OK) {
         return result;
     }
 
     result = connect_for_control();
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         const uint8_t pressed = canon_protocol_button_press(button);
         result = result_from_error(bt_gatt_write_without_response(
             context.connection, context.discovered_value_handle,
             &pressed, sizeof(pressed), false));
     }
-    if (result == CANON_ZEPHYR_OK) {
+    if (result == CANON_REMOTE_OK) {
         k_msleep(BUTTON_HOLD_MS);
         const uint8_t released = canon_protocol_button_release();
         result = result_from_error(bt_gatt_write_without_response(
@@ -783,17 +783,17 @@ static canon_zephyr_result_t send_button_command(canon_button_t button)
     return result;
 }
 
-canon_zephyr_result_t canon_ble_zephyr_shutter(void)
+canon_remote_result_t canon_remote_shutter(void)
 {
     return send_button_command(CANON_BUTTON_SHUTTER);
 }
 
-canon_zephyr_result_t canon_ble_zephyr_focus(void)
+canon_remote_result_t canon_remote_focus(void)
 {
     return send_button_command(CANON_BUTTON_FOCUS);
 }
 
-void canon_ble_zephyr_get_status(canon_zephyr_status_t *status)
+void canon_remote_get_status(canon_remote_status_t *status)
 {
     if (status == NULL) {
         return;
@@ -815,24 +815,24 @@ void canon_ble_zephyr_get_status(canon_zephyr_status_t *status)
     }
 }
 
-const char *canon_ble_zephyr_result_name(canon_zephyr_result_t result)
+const char *canon_remote_result_name(canon_remote_result_t result)
 {
     switch (result) {
-    case CANON_ZEPHYR_OK:
+    case CANON_REMOTE_OK:
         return "ok";
-    case CANON_ZEPHYR_BUSY:
+    case CANON_REMOTE_BUSY:
         return "busy";
-    case CANON_ZEPHYR_NOT_READY:
+    case CANON_REMOTE_NOT_READY:
         return "BLE host not ready";
-    case CANON_ZEPHYR_NOT_PAIRED:
+    case CANON_REMOTE_NOT_PAIRED:
         return "no saved camera";
-    case CANON_ZEPHYR_NOT_FOUND:
+    case CANON_REMOTE_NOT_FOUND:
         return "Canon camera not found";
-    case CANON_ZEPHYR_TIMEOUT:
+    case CANON_REMOTE_TIMEOUT:
         return "operation timed out";
-    case CANON_ZEPHYR_INVALID_ARGUMENT:
+    case CANON_REMOTE_INVALID_ARGUMENT:
         return "invalid argument";
-    case CANON_ZEPHYR_STACK_ERROR:
+    case CANON_REMOTE_STACK_ERROR:
     default:
         return "Bluetooth stack error";
     }

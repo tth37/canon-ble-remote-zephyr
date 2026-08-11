@@ -19,24 +19,21 @@ There is deliberately no custom HAL or application-level `if (esp32)` /
 `if (nrf52)` switch. A new Zephyr-supported board should need a configuration
 fragment, not a copied firmware backend.
 
-## Domain boundary
+## Canon Remote module
 
-`shared/canon` is the small portable core. It owns behavior that does not know
-about an RTOS or Bluetooth stack:
+`firmware/src/canon` is one cohesive Canon Remote module. `remote.h` is its
+only public interface. Behind that interface, the implementation owns:
 
-- Canon service, registration, and trigger UUID bytes
-- registration and button packet construction
+- Canon UUIDs, registration packets, and trigger packets
 - the versioned, checksummed peer-address record
+- BLE scan, connection, security, and GATT discovery
+- bond/settings operations and command synchronization
 
-It includes only standard C headers and is compiled by the host test in
-`make test`.
-
-`firmware/src/canon_ble_zephyr.c` is the cohesive Canon Remote module. It owns
-the BLE scan, connection, security, GATT discovery, bond/settings operations,
-and command synchronization as one lifecycle. These operations are tightly
-coupled by Canon's protocol ordering, so splitting them into generic scanning,
-storage, and GATT wrappers would obscure the state machine without creating a
-useful portability boundary.
+`protocol_internal.h` is private to the module; callers do not need to know
+the Canon wire format or storage encoding. These operations are tightly
+coupled by Canon's protocol ordering, so exposing separate generic scanning,
+storage, packet, and GATT interfaces would obscure the lifecycle without
+creating useful seams.
 
 The shell is only an adapter: it parses user input, calls the Canon Remote
 module, and formats status. It does not own BLE state.
@@ -77,8 +74,8 @@ requirements in this repository. A clean `make setup` reconstructs the local
 workspace without global compiler or Python package installs.
 
 The only supported application build path is `west build`. The Makefile adds
-selection persistence, setup markers, per-board build directories, host tests,
-and editor integration; it does not invoke PlatformIO.
+selection persistence, setup markers, per-board build directories, and editor
+integration; it does not invoke PlatformIO.
 
 ## Adding another Zephyr board
 

@@ -5,14 +5,13 @@ project(canon_remote)
 
 target_sources(app PRIVATE
     src/main.c
-    src/canon_ble_zephyr.c
+    src/canon/protocol.c
+    src/canon/remote.c
     src/shell_commands.c
-    ../shared/canon/src/canon_protocol.c
 )
 
 target_include_directories(app PRIVATE
     src
-    ../shared/canon/include
 )
 
 target_compile_options(app PRIVATE -Wall -Wextra -Werror)

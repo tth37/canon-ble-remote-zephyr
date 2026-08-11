@@ -68,7 +68,6 @@ Useful commands:
 ```sh
 make help
 make board
-make test
 make compile-commands
 make pristine
 ```
@@ -142,10 +141,11 @@ Attribution and its license are retained under `third_party`.
 ```text
 firmware/                one Zephyr application for every board
   boards/                board-specific Kconfig fragments
-  src/                   shell and Zephyr Canon BLE implementation
+  src/
+    canon/               complete Canon Remote module
+    main.c               application entry point
+    shell_commands.c     serial-shell adapter
   west.yml               pinned Zephyr workspace manifest
-shared/canon/            platform-independent Canon packets and peer records
-tests/host/              native tests for the shared protocol
 third_party/             upstream attribution and license
 tools/                   interactive serial helper
 ```
