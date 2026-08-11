@@ -45,6 +45,7 @@ BUILD_ASSERT(sizeof(CANON_REMOTE_NAME) - 1U <= CANON_REMOTE_NAME_MAX,
 #define BUTTON_SETTLE_MS 50U
 #define BUTTON_OPERATION_TIMEOUT_MS 6000U
 #define BUTTON_CANCEL_POLL_MS 20U
+#define PAIR_OPERATION_TIMEOUT_MS 120000U
 #define BUTTON_THREAD_STACK_SIZE 3072U
 #define BUTTON_THREAD_PRIORITY 5
 
@@ -61,17 +62,14 @@ static struct bt_uuid_128 canon_trigger_uuid =
 
 static const struct bt_le_scan_param canon_scan_parameters =
     BT_LE_SCAN_PARAM_INIT(BT_LE_SCAN_TYPE_ACTIVE,
-                          BT_LE_SCAN_OPT_FILTER_DUPLICATE,
-                          CANON_SCAN_INTERVAL, CANON_SCAN_WINDOW);
+                          BT_LE_SCAN_OPT_FILTER_DUPLICATE, CANON_SCAN_INTERVAL,
+                          CANON_SCAN_WINDOW);
 static const struct bt_conn_le_create_param canon_create_parameters =
-    BT_CONN_LE_CREATE_PARAM_INIT(BT_CONN_LE_OPT_NONE,
-                                 CANON_SCAN_INTERVAL,
+    BT_CONN_LE_CREATE_PARAM_INIT(BT_CONN_LE_OPT_NONE, CANON_SCAN_INTERVAL,
                                  CANON_SCAN_WINDOW);
 static const struct bt_le_conn_param canon_connection_parameters =
-    BT_LE_CONN_PARAM_INIT(CANON_CONNECTION_INTERVAL,
-                          CANON_CONNECTION_INTERVAL,
-                          CANON_CONNECTION_LATENCY,
-                          CANON_SUPERVISION_TIMEOUT);
+    BT_LE_CONN_PARAM_INIT(CANON_CONNECTION_INTERVAL, CANON_CONNECTION_INTERVAL,
+                          CANON_CONNECTION_LATENCY, CANON_SUPERVISION_TIMEOUT);
 
 typedef struct {
     struct k_mutex operation_mutex;
@@ -99,6 +97,7 @@ typedef struct {
     atomic_t applied_buttons;
     atomic_t button_generation;
     atomic_t button_cancel_generation;
+    atomic_t explicit_cancel_generation;
 
     bt_addr_le_t camera_address;
     bt_addr_le_t scan_address;
@@ -116,7 +115,8 @@ K_THREAD_STACK_DEFINE(button_thread_stack, BUTTON_THREAD_STACK_SIZE);
 static struct k_thread button_thread;
 
 typedef struct {
-    atomic_val_t cancel_generation;
+    atomic_val_t button_cancel_generation;
+    atomic_val_t explicit_cancel_generation;
     int64_t deadline_ms;
 } operation_guard_t;
 
@@ -195,14 +195,15 @@ static canon_remote_result_t result_from_error(int error)
 
 static bool operation_cancelled(const operation_guard_t *guard)
 {
-    return guard != NULL &&
-           atomic_get(&context.button_cancel_generation) !=
-               guard->cancel_generation;
+    return guard != NULL && (atomic_get(&context.button_cancel_generation) !=
+                                 guard->button_cancel_generation ||
+                             atomic_get(&context.explicit_cancel_generation) !=
+                                 guard->explicit_cancel_generation);
 }
 
-static canon_remote_result_t wait_for_operation(
-    struct k_sem *semaphore, uint32_t timeout_ms,
-    const operation_guard_t *guard)
+static canon_remote_result_t wait_for_operation(struct k_sem *semaphore,
+                                                uint32_t timeout_ms,
+                                                const operation_guard_t *guard)
 {
     if (guard == NULL) {
         if (k_sem_take(semaphore, K_MSEC(timeout_ms)) != 0) {
@@ -212,16 +213,15 @@ static canon_remote_result_t wait_for_operation(
     }
 
     const int64_t local_deadline = k_uptime_get() + timeout_ms;
-    const int64_t deadline =
-        MIN(local_deadline, guard->deadline_ms);
+    const int64_t deadline = MIN(local_deadline, guard->deadline_ms);
     while (!operation_cancelled(guard)) {
         const int64_t remaining_ms = deadline - k_uptime_get();
         if (remaining_ms <= 0) {
             return result_from_error(-ETIMEDOUT);
         }
 
-        const uint32_t wait_ms = (uint32_t)MIN(
-            remaining_ms, (int64_t)BUTTON_CANCEL_POLL_MS);
+        const uint32_t wait_ms =
+            (uint32_t)MIN(remaining_ms, (int64_t)BUTTON_CANCEL_POLL_MS);
         if (k_sem_take(semaphore, K_MSEC(wait_ms)) == 0) {
             if (operation_cancelled(guard)) {
                 return CANON_REMOTE_CANCELLED;
@@ -242,8 +242,8 @@ static int load_peer_setting(const char *key, size_t length,
     }
 
     uint8_t record[CANON_PEER_RECORD_SIZE];
-    const ssize_t read_length = read_callback(
-        callback_argument, record, sizeof(record));
+    const ssize_t read_length =
+        read_callback(callback_argument, record, sizeof(record));
     if (read_length != (ssize_t)sizeof(record)) {
         return read_length < 0 ? (int)read_length : -EINVAL;
     }
@@ -262,8 +262,8 @@ static int load_peer_setting(const char *key, size_t length,
     return 0;
 }
 
-SETTINGS_STATIC_HANDLER_DEFINE(canon_peer, "canon", NULL,
-                               load_peer_setting, NULL, NULL);
+SETTINGS_STATIC_HANDLER_DEFINE(canon_peer, "canon", NULL, load_peer_setting,
+                               NULL, NULL);
 
 static uint8_t portable_address_type(uint8_t address_type)
 {
@@ -284,8 +284,8 @@ static int save_camera_address(const bt_addr_le_t *address)
         return -EINVAL;
     }
 
-    const int result = settings_save_one(CANON_SETTINGS_PEER_KEY,
-                                         record, sizeof(record));
+    const int result =
+        settings_save_one(CANON_SETTINGS_PEER_KEY, record, sizeof(record));
     if (result == 0) {
         context.camera_address = *address;
         context.camera_address.type = address_type;
@@ -295,7 +295,7 @@ static int save_camera_address(const bt_addr_le_t *address)
 }
 
 static bool advertisement_field_has_canon_uuid(struct bt_data *data,
-                                                void *user_data)
+                                               void *user_data)
 {
     bool *found = user_data;
     if (data->type != BT_DATA_UUID128_ALL &&
@@ -303,8 +303,7 @@ static bool advertisement_field_has_canon_uuid(struct bt_data *data,
         return true;
     }
 
-    for (size_t offset = 0U;
-         offset + CANON_UUID_SIZE <= data->data_len;
+    for (size_t offset = 0U; offset + CANON_UUID_SIZE <= data->data_len;
          offset += CANON_UUID_SIZE) {
         if (memcmp(&data->data[offset], canon_service_uuid.val,
                    CANON_UUID_SIZE) == 0) {
@@ -321,8 +320,7 @@ static void scan_received(const bt_addr_le_t *address, int8_t rssi,
 {
     (void)rssi;
     (void)advertisement_type;
-    if (!atomic_get(&context.scanning) ||
-        atomic_get(&context.scan_found)) {
+    if (!atomic_get(&context.scanning) || atomic_get(&context.scan_found)) {
         return;
     }
 
@@ -335,8 +333,7 @@ static void scan_received(const bt_addr_le_t *address, int8_t rssi,
     }
 }
 
-static void connection_established(struct bt_conn *connection,
-                                   uint8_t error)
+static void connection_established(struct bt_conn *connection, uint8_t error)
 {
     if (error != 0U) {
         k_spinlock_key_t key = k_spin_lock(&context.connection_lock);
@@ -345,8 +342,7 @@ static void connection_established(struct bt_conn *connection,
             return;
         }
 
-        const bool requested =
-            atomic_get(&context.disconnect_requested) != 0;
+        const bool requested = atomic_get(&context.disconnect_requested) != 0;
         context.connection = NULL;
         context.last_ble_error = error;
         context.operation_result = requested ? 0 : -ECONNREFUSED;
@@ -368,10 +364,8 @@ static void connection_established(struct bt_conn *connection,
 
     atomic_set(&context.connected, 1);
     context.operation_result = 0;
-    const bool secure_on_connect =
-        atomic_get(&context.secure_on_connect) != 0;
-    const bool force_pair =
-        atomic_get(&context.force_pair_on_connect) != 0;
+    const bool secure_on_connect = atomic_get(&context.secure_on_connect) != 0;
+    const bool force_pair = atomic_get(&context.force_pair_on_connect) != 0;
     k_spin_unlock(&context.connection_lock, key);
 
     int security_result = 0;
@@ -405,8 +399,8 @@ static void connection_security_changed(struct bt_conn *connection,
         return;
     }
 
-    const bool secured = error == BT_SECURITY_ERR_SUCCESS &&
-                         level >= BT_SECURITY_L2;
+    const bool secured =
+        error == BT_SECURITY_ERR_SUCCESS && level >= BT_SECURITY_L2;
     atomic_set(&context.encrypted, secured ? 1 : 0);
     if (!secured) {
         atomic_set(&context.ready, 0);
@@ -418,8 +412,7 @@ static void connection_security_changed(struct bt_conn *connection,
     k_spin_unlock(&context.connection_lock, key);
 }
 
-static void connection_disconnected(struct bt_conn *connection,
-                                    uint8_t reason)
+static void connection_disconnected(struct bt_conn *connection, uint8_t reason)
 {
     k_spinlock_key_t key = k_spin_lock(&context.connection_lock);
     if (context.connection != connection) {
@@ -449,9 +442,9 @@ BT_CONN_CB_DEFINE(canon_connection_callbacks) = {
     .security_changed = connection_security_changed,
 };
 
-static uint8_t discovery_completed(
-    struct bt_conn *connection, const struct bt_gatt_attr *attribute,
-    struct bt_gatt_discover_params *parameters)
+static uint8_t discovery_completed(struct bt_conn *connection,
+                                   const struct bt_gatt_attr *attribute,
+                                   struct bt_gatt_discover_params *parameters)
 {
     k_spinlock_key_t key = k_spin_lock(&context.connection_lock);
     if (context.connection != connection) {
@@ -486,8 +479,7 @@ static uint8_t discovery_completed(
     return BT_GATT_ITER_STOP;
 }
 
-static canon_remote_result_t discover_service(
-    const operation_guard_t *guard)
+static canon_remote_result_t discover_service(const operation_guard_t *guard)
 {
     context.service_start_handle = 0U;
     context.service_end_handle = 0U;
@@ -505,8 +497,8 @@ static canon_remote_result_t discover_service(
     if (connection == NULL) {
         return result_from_error(-ENOTCONN);
     }
-    const int result = bt_gatt_discover(
-        connection, &context.discovery_parameters);
+    const int result =
+        bt_gatt_discover(connection, &context.discovery_parameters);
     bt_conn_unref(connection);
     if (result != 0) {
         return result_from_error(result);
@@ -515,9 +507,9 @@ static canon_remote_result_t discover_service(
                               GATT_TIMEOUT_SECONDS * 1000U, guard);
 }
 
-static canon_remote_result_t discover_characteristic(
-    const struct bt_uuid *uuid, uint16_t *value_handle,
-    const operation_guard_t *guard)
+static canon_remote_result_t
+discover_characteristic(const struct bt_uuid *uuid, uint16_t *value_handle,
+                        const operation_guard_t *guard)
 {
     context.discovered_value_handle = 0U;
     context.operation_result = 0;
@@ -526,8 +518,7 @@ static canon_remote_result_t discover_characteristic(
            sizeof(context.discovery_parameters));
     context.discovery_parameters.uuid = uuid;
     context.discovery_parameters.func = discovery_completed;
-    context.discovery_parameters.start_handle =
-        context.service_start_handle;
+    context.discovery_parameters.start_handle = context.service_start_handle;
     context.discovery_parameters.end_handle = context.service_end_handle;
     context.discovery_parameters.type = BT_GATT_DISCOVER_CHARACTERISTIC;
 
@@ -535,8 +526,8 @@ static canon_remote_result_t discover_characteristic(
     if (connection == NULL) {
         return result_from_error(-ENOTCONN);
     }
-    const int result = bt_gatt_discover(
-        connection, &context.discovery_parameters);
+    const int result =
+        bt_gatt_discover(connection, &context.discovery_parameters);
     bt_conn_unref(connection);
     if (result != 0) {
         return result_from_error(result);
@@ -550,7 +541,7 @@ static canon_remote_result_t discover_characteristic(
     return wait_result;
 }
 
-static canon_remote_result_t disconnect_link(void)
+static canon_remote_result_t disconnect_link(const operation_guard_t *guard)
 {
     struct bt_conn *connection = connection_ref();
     if (connection == NULL) {
@@ -562,8 +553,8 @@ static canon_remote_result_t disconnect_link(void)
     context.operation_result = 0;
     atomic_set(&context.disconnect_requested, 1);
     k_sem_reset(&context.disconnected_sem);
-    const int result = bt_conn_disconnect(
-        connection, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    const int result =
+        bt_conn_disconnect(connection, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     if (result == -ENOTCONN) {
         struct bt_conn *detached = connection_detach(connection);
         if (detached != NULL) {
@@ -582,8 +573,7 @@ static canon_remote_result_t disconnect_link(void)
 
     bt_conn_unref(connection);
     const canon_remote_result_t wait_result = wait_for_operation(
-        &context.disconnected_sem, DISCONNECT_TIMEOUT_SECONDS * 1000U,
-        NULL);
+        &context.disconnected_sem, DISCONNECT_TIMEOUT_SECONDS * 1000U, guard);
     atomic_set(&context.disconnect_requested, 0);
     return wait_result;
 }
@@ -591,7 +581,7 @@ static canon_remote_result_t disconnect_link(void)
 static void disconnect_after_failure(void)
 {
     const int failed_error = context.last_ble_error;
-    (void)disconnect_link();
+    (void)disconnect_link(NULL);
     context.last_ble_error = failed_error;
 }
 
@@ -615,9 +605,9 @@ static canon_remote_result_t connect_link(const bt_addr_le_t *address,
     k_sem_reset(&context.security_sem);
 
     struct bt_conn *new_connection = NULL;
-    const int result = bt_conn_le_create(
-        address, &canon_create_parameters, &canon_connection_parameters,
-        &new_connection);
+    const int result =
+        bt_conn_le_create(address, &canon_create_parameters,
+                          &canon_connection_parameters, &new_connection);
     if (result != 0) {
         atomic_set(&context.secure_on_connect, 0);
         atomic_set(&context.force_pair_on_connect, 0);
@@ -667,7 +657,8 @@ static canon_remote_result_t secure_link(const operation_guard_t *guard)
     return result;
 }
 
-static canon_remote_result_t scan_for_camera(uint32_t scan_seconds)
+static canon_remote_result_t scan_for_camera(uint32_t scan_seconds,
+                                             const operation_guard_t *guard)
 {
     context.operation_result = 0;
     context.last_ble_error = 0;
@@ -675,28 +666,29 @@ static canon_remote_result_t scan_for_camera(uint32_t scan_seconds)
     atomic_set(&context.scanning, 1);
     k_sem_reset(&context.scan_sem);
 
-    const int result = bt_le_scan_start(&canon_scan_parameters,
-                                        scan_received);
+    const int result = bt_le_scan_start(&canon_scan_parameters, scan_received);
     if (result != 0) {
         atomic_set(&context.scanning, 0);
         return result_from_error(result);
     }
 
-    const int wait_result = k_sem_take(&context.scan_sem,
-                                       K_SECONDS(scan_seconds));
+    const canon_remote_result_t wait_result =
+        wait_for_operation(&context.scan_sem, scan_seconds * 1000U, guard);
     const int stop_result = bt_le_scan_stop();
     atomic_set(&context.scanning, 0);
     if (stop_result != 0 && stop_result != -EALREADY) {
         return result_from_error(stop_result);
     }
-    if (wait_result == 0 && atomic_get(&context.scan_found)) {
+    if (wait_result == CANON_REMOTE_CANCELLED) {
+        return wait_result;
+    }
+    if (wait_result == CANON_REMOTE_OK && atomic_get(&context.scan_found)) {
         return CANON_REMOTE_OK;
     }
     return result_from_error(-ENOENT);
 }
 
-static canon_remote_result_t connect_for_control(
-    const operation_guard_t *guard)
+static canon_remote_result_t connect_for_control(const operation_guard_t *guard)
 {
     if (!atomic_get(&context.paired)) {
         return CANON_REMOTE_NOT_PAIRED;
@@ -714,14 +706,14 @@ static canon_remote_result_t connect_for_control(
     struct bt_conn *existing_connection = connection_ref();
     if (existing_connection != NULL) {
         bt_conn_unref(existing_connection);
-        const canon_remote_result_t disconnect_result = disconnect_link();
+        const canon_remote_result_t disconnect_result = disconnect_link(guard);
         if (disconnect_result != CANON_REMOTE_OK) {
             return disconnect_result;
         }
     }
 
-    canon_remote_result_t result = connect_link(
-        &context.camera_address, false, guard);
+    canon_remote_result_t result =
+        connect_link(&context.camera_address, false, guard);
     if (result == CANON_REMOTE_OK) {
         result = secure_link(guard);
     }
@@ -746,13 +738,11 @@ static canon_remote_result_t connect_for_control(
 
 static canon_remote_result_t begin_operation(bool button_worker)
 {
-    if (!atomic_get(&context.initialized) ||
-        !atomic_get(&context.host_ready)) {
+    if (!atomic_get(&context.initialized) || !atomic_get(&context.host_ready)) {
         return CANON_REMOTE_NOT_READY;
     }
-    if (!button_worker &&
-        (atomic_get(&context.requested_buttons) != 0 ||
-         atomic_get(&context.applied_buttons) != 0)) {
+    if (!button_worker && (atomic_get(&context.requested_buttons) != 0 ||
+                           atomic_get(&context.applied_buttons) != 0)) {
         return CANON_REMOTE_BUSY;
     }
     if (k_mutex_lock(&context.operation_mutex, K_NO_WAIT) != 0) {
@@ -800,8 +790,8 @@ canon_remote_result_t canon_remote_initialize(void)
 
     k_tid_t button_thread_id = k_thread_create(
         &button_thread, button_thread_stack,
-        K_THREAD_STACK_SIZEOF(button_thread_stack), button_thread_entry,
-        NULL, NULL, NULL, BUTTON_THREAD_PRIORITY, 0, K_NO_WAIT);
+        K_THREAD_STACK_SIZEOF(button_thread_stack), button_thread_entry, NULL,
+        NULL, NULL, BUTTON_THREAD_PRIORITY, 0, K_NO_WAIT);
     (void)k_thread_name_set(button_thread_id, "canon_buttons");
     return CANON_REMOTE_OK;
 }
@@ -812,42 +802,53 @@ canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
         return CANON_REMOTE_INVALID_ARGUMENT;
     }
 
+    const atomic_val_t explicit_cancel_generation =
+        atomic_get(&context.explicit_cancel_generation);
     canon_remote_result_t result = begin_operation(false);
     if (result != CANON_REMOTE_OK) {
         return result;
     }
 
+    const operation_guard_t guard = {
+        .button_cancel_generation =
+            atomic_get(&context.button_cancel_generation),
+        .explicit_cancel_generation = explicit_cancel_generation,
+        .deadline_ms = k_uptime_get() + PAIR_OPERATION_TIMEOUT_MS,
+    };
+    if (operation_cancelled(&guard)) {
+        finish_operation();
+        return CANON_REMOTE_CANCELLED;
+    }
+
     const bool had_previous_camera = atomic_get(&context.paired) != 0;
     bt_addr_le_t previous_camera_address;
     if (had_previous_camera) {
-        bt_addr_le_copy(&previous_camera_address,
-                        &context.camera_address);
+        bt_addr_le_copy(&previous_camera_address, &context.camera_address);
     }
 
-    result = disconnect_link();
+    result = disconnect_link(&guard);
     if (result == CANON_REMOTE_OK) {
-        result = scan_for_camera(scan_seconds);
+        result = scan_for_camera(scan_seconds, &guard);
     }
     if (result == CANON_REMOTE_OK) {
-        const int unpair_result = bt_unpair(BT_ID_DEFAULT,
-                                            &context.scan_address);
+        const int unpair_result =
+            bt_unpair(BT_ID_DEFAULT, &context.scan_address);
         if (unpair_result != 0 && unpair_result != -ENOENT) {
-            LOG_WRN("Could not remove a stale peer bond: %d",
-                    unpair_result);
+            LOG_WRN("Could not remove a stale peer bond: %d", unpair_result);
         }
-        result = connect_link(&context.scan_address, true, NULL);
+        result = connect_link(&context.scan_address, true, &guard);
     }
     if (result == CANON_REMOTE_OK) {
-        result = secure_link(NULL);
+        result = secure_link(&guard);
     }
     if (result == CANON_REMOTE_OK) {
-        result = discover_service(NULL);
+        result = discover_service(&guard);
     }
 
     uint16_t pairing_handle = 0U;
     if (result == CANON_REMOTE_OK) {
         result = discover_characteristic(&canon_pairing_uuid.uuid,
-                                         &pairing_handle, NULL);
+                                         &pairing_handle, &guard);
     }
 
     canon_packet_t packet;
@@ -855,14 +856,16 @@ canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
         !canon_protocol_make_pairing_packet(CANON_REMOTE_NAME, &packet)) {
         result = CANON_REMOTE_INVALID_ARGUMENT;
     }
+    if (result == CANON_REMOTE_OK && operation_cancelled(&guard)) {
+        result = CANON_REMOTE_CANCELLED;
+    }
     if (result == CANON_REMOTE_OK) {
         struct bt_conn *connection = connection_ref();
         if (connection == NULL) {
             result = result_from_error(-ENOTCONN);
         } else {
             result = result_from_error(bt_gatt_write_without_response(
-                connection, pairing_handle, packet.data,
-                packet.length, false));
+                connection, pairing_handle, packet.data, packet.length, false));
             bt_conn_unref(connection);
         }
     }
@@ -873,25 +876,24 @@ canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
             result = result_from_error(-ENOTCONN);
         } else {
             struct bt_conn_info connection_info;
-            const int info_result = bt_conn_get_info(
-                connection, &connection_info);
-            if (info_result == 0 &&
-                connection_info.type == BT_CONN_TYPE_LE) {
+            const int info_result =
+                bt_conn_get_info(connection, &connection_info);
+            if (info_result == 0 && connection_info.type == BT_CONN_TYPE_LE) {
                 result = result_from_error(
                     save_camera_address(connection_info.le.dst));
             } else {
-                result = result_from_error(
-                    info_result == 0 ? -EINVAL : info_result);
+                result =
+                    result_from_error(info_result == 0 ? -EINVAL : info_result);
             }
             bt_conn_unref(connection);
         }
     }
 
     if (result == CANON_REMOTE_OK && had_previous_camera &&
-        bt_addr_le_cmp(&previous_camera_address,
-                       &context.camera_address) != 0) {
-        const int old_unpair_result = bt_unpair(
-            BT_ID_DEFAULT, &previous_camera_address);
+        bt_addr_le_cmp(&previous_camera_address, &context.camera_address) !=
+            0) {
+        const int old_unpair_result =
+            bt_unpair(BT_ID_DEFAULT, &previous_camera_address);
         if (old_unpair_result != 0 && old_unpair_result != -ENOENT) {
             LOG_WRN("Could not remove the previous camera bond: %d",
                     old_unpair_result);
@@ -900,7 +902,7 @@ canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
 
     if (result == CANON_REMOTE_OK) {
         k_msleep(PAIRING_BOND_SETTLE_MS);
-        const canon_remote_result_t disconnect_result = disconnect_link();
+        const canon_remote_result_t disconnect_result = disconnect_link(NULL);
         if (disconnect_result == CANON_REMOTE_OK) {
             k_msleep(PAIRING_RECONNECT_DELAY_MS);
             const canon_remote_result_t reconnect_result =
@@ -917,6 +919,15 @@ canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
 
     finish_operation();
     return result;
+}
+
+canon_remote_result_t canon_remote_cancel_pairing(void)
+{
+    if (!atomic_get(&context.initialized) || !atomic_get(&context.host_ready)) {
+        return CANON_REMOTE_NOT_READY;
+    }
+    atomic_inc(&context.explicit_cancel_generation);
+    return CANON_REMOTE_OK;
 }
 
 canon_remote_result_t canon_remote_connect(void)
@@ -936,7 +947,7 @@ canon_remote_result_t canon_remote_disconnect(void)
     if (result != CANON_REMOTE_OK) {
         return result;
     }
-    result = disconnect_link();
+    result = disconnect_link(NULL);
     finish_operation();
     return result;
 }
@@ -948,10 +959,10 @@ canon_remote_result_t canon_remote_forget(void)
         return result;
     }
 
-    result = disconnect_link();
+    result = disconnect_link(NULL);
     if (result == CANON_REMOTE_OK && atomic_get(&context.paired)) {
-        const int unpair_result = bt_unpair(BT_ID_DEFAULT,
-                                            &context.camera_address);
+        const int unpair_result =
+            bt_unpair(BT_ID_DEFAULT, &context.camera_address);
         if (unpair_result != 0 && unpair_result != -ENOENT) {
             result = result_from_error(unpair_result);
         }
@@ -963,8 +974,7 @@ canon_remote_result_t canon_remote_forget(void)
         }
     }
     if (result == CANON_REMOTE_OK) {
-        memset(&context.camera_address, 0,
-               sizeof(context.camera_address));
+        memset(&context.camera_address, 0, sizeof(context.camera_address));
         atomic_set(&context.paired, 0);
         context.last_ble_error = 0;
     }
@@ -991,15 +1001,15 @@ static canon_remote_result_t send_button_command(canon_button_t button)
     if (result == CANON_REMOTE_OK) {
         const uint8_t pressed = canon_protocol_button_press(button);
         result = result_from_error(bt_gatt_write_without_response(
-            connection, context.discovered_value_handle,
-            &pressed, sizeof(pressed), false));
+            connection, context.discovered_value_handle, &pressed,
+            sizeof(pressed), false));
     }
     if (result == CANON_REMOTE_OK) {
         k_msleep(BUTTON_HOLD_MS);
         const uint8_t released = canon_protocol_button_release();
         result = result_from_error(bt_gatt_write_without_response(
-            connection, context.discovered_value_handle,
-            &released, sizeof(released), false));
+            connection, context.discovered_value_handle, &released,
+            sizeof(released), false));
         k_msleep(BUTTON_SETTLE_MS);
     }
     if (connection != NULL) {
@@ -1017,17 +1027,16 @@ static canon_remote_result_t write_button_state(atomic_val_t buttons)
         return result_from_error(-ENOTCONN);
     }
 
-    const uint8_t value = canon_protocol_button_state(
-        (buttons & BIT(BUTTON_FOCUS_BIT)) != 0,
-        (buttons & BIT(BUTTON_SHUTTER_BIT)) != 0);
+    const uint8_t value =
+        canon_protocol_button_state((buttons & BIT(BUTTON_FOCUS_BIT)) != 0,
+                                    (buttons & BIT(BUTTON_SHUTTER_BIT)) != 0);
     int write_result = bt_gatt_write_without_response(
-        connection, context.discovered_value_handle, &value,
-        sizeof(value), false);
+        connection, context.discovered_value_handle, &value, sizeof(value),
+        false);
     if (write_result == 0) {
         k_spinlock_key_t key = k_spin_lock(&context.connection_lock);
         if (context.connection == connection &&
-            atomic_get(&context.connected) &&
-            atomic_get(&context.ready)) {
+            atomic_get(&context.connected) && atomic_get(&context.ready)) {
             atomic_set(&context.applied_buttons, buttons);
         } else {
             write_result = -ENOTCONN;
@@ -1038,8 +1047,8 @@ static canon_remote_result_t write_button_state(atomic_val_t buttons)
     return result_from_error(write_result);
 }
 
-static canon_remote_result_t begin_button_operation(
-    const operation_guard_t *guard)
+static canon_remote_result_t
+begin_button_operation(const operation_guard_t *guard)
 {
     while (!operation_cancelled(guard)) {
         const canon_remote_result_t result = begin_operation(true);
@@ -1065,13 +1074,13 @@ static void process_button_state(void)
             return;
         }
 
-        const atomic_val_t generation =
-            atomic_get(&context.button_generation);
+        const atomic_val_t generation = atomic_get(&context.button_generation);
         const operation_guard_t guard = {
-            .cancel_generation =
+            .button_cancel_generation =
                 atomic_get(&context.button_cancel_generation),
-            .deadline_ms =
-                k_uptime_get() + BUTTON_OPERATION_TIMEOUT_MS,
+            .explicit_cancel_generation =
+                atomic_get(&context.explicit_cancel_generation),
+            .deadline_ms = k_uptime_get() + BUTTON_OPERATION_TIMEOUT_MS,
         };
 
         canon_remote_result_t result = begin_button_operation(&guard);
@@ -1083,7 +1092,7 @@ static void process_button_state(void)
             if (result == CANON_REMOTE_OK &&
                 (operation_cancelled(&guard) || latest == 0)) {
                 result = CANON_REMOTE_CANCELLED;
-                (void)disconnect_link();
+                (void)disconnect_link(NULL);
             } else if (result == CANON_REMOTE_OK) {
                 result = write_button_state(latest);
             }
@@ -1096,8 +1105,7 @@ static void process_button_state(void)
         }
 
         if (operation_started) {
-            if (result != CANON_REMOTE_OK &&
-                result != CANON_REMOTE_CANCELLED) {
+            if (result != CANON_REMOTE_OK && result != CANON_REMOTE_CANCELLED) {
                 atomic_set(&context.applied_buttons, 0);
                 disconnect_after_failure();
             }
@@ -1109,8 +1117,7 @@ static void process_button_state(void)
         }
         if (result != CANON_REMOTE_OK) {
             LOG_WRN("Physical button update failed: %s (BLE %d)",
-                    canon_remote_result_name(result),
-                    context.last_ble_error);
+                    canon_remote_result_name(result), context.last_ble_error);
             return;
         }
         if (generation == atomic_get(&context.button_generation) &&
@@ -1142,16 +1149,13 @@ canon_remote_result_t canon_remote_set_button(canon_remote_button_t button,
         button != CANON_REMOTE_BUTTON_SHUTTER) {
         return CANON_REMOTE_INVALID_ARGUMENT;
     }
-    if (!atomic_get(&context.initialized) ||
-        !atomic_get(&context.host_ready)) {
+    if (!atomic_get(&context.initialized) || !atomic_get(&context.host_ready)) {
         return CANON_REMOTE_NOT_READY;
     }
 
-    const bool was_pressed = pressed
-                                 ? atomic_test_and_set_bit(
-                                       &context.requested_buttons, button)
-                                 : atomic_test_and_clear_bit(
-                                       &context.requested_buttons, button);
+    const bool was_pressed =
+        pressed ? atomic_test_and_set_bit(&context.requested_buttons, button)
+                : atomic_test_and_clear_bit(&context.requested_buttons, button);
     const bool changed = pressed ? !was_pressed : was_pressed;
     if (!changed) {
         return CANON_REMOTE_OK;
@@ -1190,17 +1194,12 @@ void canon_remote_get_status(canon_remote_status_t *status)
     status->ready = atomic_get(&context.ready) != 0;
     status->scanning = atomic_get(&context.scanning) != 0;
     status->busy = atomic_get(&context.busy) != 0;
-    const atomic_val_t requested =
-        atomic_get(&context.requested_buttons);
-    status->focus_requested =
-        (requested & BIT(BUTTON_FOCUS_BIT)) != 0;
-    status->shutter_requested =
-        (requested & BIT(BUTTON_SHUTTER_BIT)) != 0;
+    const atomic_val_t requested = atomic_get(&context.requested_buttons);
+    status->focus_requested = (requested & BIT(BUTTON_FOCUS_BIT)) != 0;
+    status->shutter_requested = (requested & BIT(BUTTON_SHUTTER_BIT)) != 0;
     const atomic_val_t applied = atomic_get(&context.applied_buttons);
-    status->focus_applied =
-        (applied & BIT(BUTTON_FOCUS_BIT)) != 0;
-    status->shutter_applied =
-        (applied & BIT(BUTTON_SHUTTER_BIT)) != 0;
+    status->focus_applied = (applied & BIT(BUTTON_FOCUS_BIT)) != 0;
+    status->shutter_applied = (applied & BIT(BUTTON_SHUTTER_BIT)) != 0;
     status->last_ble_error = context.last_ble_error;
     if (status->paired) {
         bt_addr_le_to_str(&context.camera_address, status->camera_address,

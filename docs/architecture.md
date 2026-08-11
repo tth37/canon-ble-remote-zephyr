@@ -38,6 +38,35 @@ creating useful seams.
 The shell is only an adapter: it parses user input, calls the Canon Remote
 module, and formats status. It does not own BLE state.
 
+`firmware/src/hardware` is another adapter. Its GPIO worker applies an 8 ms
+quiet-time debounce before calling `canon_remote_set_button()` for stable focus
+and shutter transitions. A separate recessed PAIR input invokes the module's
+pairing transaction after a five-second hold, suppressing the camera controls
+until pairing finishes and all inputs are released. This keeps pairing
+recognition out of the latency-sensitive focus and shutter paths. The OLED
+worker renders the module's thread-safe status snapshot, physical inputs, and
+PAIR countdown. The ESP32-C6 Devicetree overlay supplies the concrete pins and
+SSD1306 node. Targets without those aliases and the chosen display compile
+small no-op adapters, keeping board selection out of the Canon module.
+
+While the synchronous pairing transaction owns the GPIO worker, a debounced
+delayable work item watches for fresh button presses and advances the Canon
+module's cancellation generation. Guarded scan, connection, security, and
+discovery waits notice cancellation within approximately 20 ms. The release
+of the original PAIR hold is ignored, while a later press of any button
+cancels pairing without leaking a camera command.
+
+The RGB indicator worker reads the same snapshots and drives the ESP32-C6
+DevKitC's single WS2812-compatible LED through Zephyr's I2S LED-strip driver.
+It is independent of GPIO and BLE workers: pairing produces a blue blink,
+with a faster rate after the five-second hold; shutter produces a red flash,
+focus steady green, and idle turns the LED off. Targets without the
+`status-led` alias compile a no-op indicator adapter.
+
+The UART shell remains active alongside the hardware adapter. It is an
+independent control and diagnostic surface, not a runtime dependency of the
+buttons or display.
+
 Physical button edges use the module's non-blocking state API. Atomic desired
 state is consumed by a dedicated worker thread, keeping all connection,
 security, discovery, and GATT waits out of GPIO interrupt and system-workqueue

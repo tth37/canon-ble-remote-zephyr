@@ -1,16 +1,12 @@
 # Zephyr Canon BLE remote
 
-This branch is a Zephyr-native rewrite of the Canon BLE remote. One
+This project is a Zephyr-native Canon BLE remote. One
 application and one source set build for both supported boards:
 
 | Zephyr board target | Console | Validation |
 |---|---|---|
 | `esp32c6_devkitc/esp32c6/hpcore` | UART0, 115200 baud | Built, flashed, and tested with a Canon 200D II |
 | `promicro_nrf52840/nrf52840/uf2` | native USB CDC | Builds and produces UF2; hardware validation pending |
-
-The proven PlatformIO/ESP-IDF/NimBLE ESP32-C6 implementation remains on the
-`main` branch. This branch intentionally has no PlatformIO project, Wi-Fi
-commands, display code, or joystick code.
 
 ## Reproducible setup
 
@@ -81,7 +77,9 @@ The corresponding direct Zephyr command is also available after setup:
 
 ## Serial shell
 
-The firmware exposes only system and Canon remote commands:
+The UART shell remains available with the OLED and physical controls attached;
+it uses GPIO16/GPIO17 and does not share their pins. It is optional during
+normal camera use and remains useful for diagnostics and recovery:
 
 ```text
 help
@@ -95,6 +93,7 @@ camera focus [press|release]
 camera status
 camera disconnect
 camera forget
+i2c scan i2c@60004000
 ```
 
 The serial helper sends one carriage return for Enter and leaves received CRLF
@@ -103,13 +102,59 @@ passes Zephyr's ANSI prompt and history-redraw sequences directly to the host
 terminal, so arrow-key history and colored prompts render normally. Exit it
 with `Ctrl+]`.
 
-## Physical button integration
+## ESP32-C6 display and buttons
+
+The ESP32-C6 board overlay defines the following active hardware:
+
+| Part | Module pin | ESP32-C6 pin |
+|---|---|---|
+| 128x64 SSD1306 OLED | VCC | 3V3 |
+| 128x64 SSD1306 OLED | GND | GND |
+| 128x64 SSD1306 OLED | SDA | GPIO6 |
+| 128x64 SSD1306 OLED | SCL | GPIO7 |
+| Focus button | one side | GPIO20 |
+| Focus button | other side | GND |
+| Shutter button | one side | GPIO21 |
+| Shutter button | other side | GND |
+| Recessed PAIR button | one side | GPIO19 |
+| Recessed PAIR button | other side | GND |
+| Onboard addressable RGB LED | data | GPIO8 |
+
+The OLED is configured at I2C address `0x3c`. Power it from 3.3 V so any
+module-mounted I2C pull-ups cannot expose the ESP32-C6 to 5 V. SPI2 is disabled
+by the application overlay because Zephyr's upstream DevKitC definition also
+assigns GPIO6/GPIO7 to that unused peripheral.
+
+All three inputs use internal pull-ups and active-low edges. A board-specific
+worker waits until an input has been quiet for 8 ms before reading its stable
+state. Stable focus and shutter changes are then passed directly to the Canon
+module's non-blocking state API, without a two-button chord delay. Pressing and
+holding focus or shutter holds the corresponding camera-side state; releasing
+the physical button releases it.
+
+GPIO19 is a dedicated application PAIR input, not the board's EN/reset input.
+To pair at any time, first put the camera in Bluetooth Remote pairing mode,
+then hold the recessed PAIR button for five seconds. The OLED shows the hold
+countdown and the subsequent 30-second scan. Focus and shutter are suppressed
+while PAIR is held or pairing is active, and all buttons must be released
+before camera control is armed again. Releasing PAIR early cancels the request.
+After the scan starts, a new press of focus, shutter, or PAIR cancels it; the
+PAIR release following the five-second hold does not. A successful pairing can
+replace the saved camera; cancelling or failing preserves the existing peer.
+
+The onboard RGB LED needs no external wiring. It blinks blue at its normal
+rate during the five-second PAIR hold, then blinks blue faster while pairing is
+active. It shines green while focus is held and flashes red while shutter is
+held. Pairing has the highest effect priority, followed by shutter and then
+focus. The LED is off while the controls are idle.
+
+## Physical control reliability
 
 GPIO interrupt handlers must call `canon_remote_set_button()` rather than the
 synchronous `canon_remote_focus()` or `canon_remote_shutter()` pulse helpers.
 The state API is non-blocking and ISR-safe: it only updates atomics and wakes a
-dedicated Canon button thread. Debouncing remains the responsibility of the
-board-specific GPIO layer.
+dedicated Canon button thread. The ESP32-C6 GPIO module supplies the quiet-time
+debounce layer described above.
 
 ```c
 canon_remote_set_button(CANON_REMOTE_BUTTON_FOCUS, true);   /* pressed */
@@ -124,9 +169,8 @@ state. Any failed state write forces a disconnect instead of leaving an
 uncertain pressed state.
 
 An established encrypted link normally stays idle between presses. That keeps
-button latency low and does not block the CPU, shell, or GPIO handling. Use the
-following commands to exercise the future physical-button path before GPIOs
-are added:
+button latency low and does not block the CPU, shell, OLED refresh, or GPIO
+handling. The same path can be exercised from UART:
 
 ```text
 camera focus press
@@ -173,8 +217,10 @@ Attribution and its license are retained under `third_party`.
 ```text
 firmware/                one Zephyr application for every board
   boards/                board-specific Kconfig fragments
+                         and Devicetree overlays
   src/
     canon/               complete Canon Remote module
+    hardware/            GPIO controls and OLED status adapter
     main.c               application entry point
     shell_commands.c     serial-shell adapter
   west.yml               pinned Zephyr workspace manifest
@@ -199,7 +245,7 @@ editor diagnostics follow the same board selection as the build.
 ## Other branches
 
 ```sh
-git switch main       # proven ESP32-C6 ESP-IDF/NimBLE implementation
+git switch main       # tested Zephyr BLE firmware baseline
 git switch dual-rift  # dual-screen twin-stick Rift Runner
 git switch arduboy    # Arduboy2 sprite port and playground
 git switch renderer   # joystick-controlled 3D renderer

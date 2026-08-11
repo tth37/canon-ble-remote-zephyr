@@ -7,6 +7,9 @@ target_sources(app PRIVATE
     src/main.c
     src/canon/protocol.c
     src/canon/remote.c
+    src/hardware/controls.c
+    src/hardware/display.c
+    src/hardware/indicator.c
     src/shell_commands.c
 )
 
