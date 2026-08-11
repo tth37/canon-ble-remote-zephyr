@@ -33,6 +33,8 @@
 #define SECURITY_TIMEOUT_MS 15000U
 #define GATT_TIMEOUT_MS 10000U
 #define DISCONNECT_TIMEOUT_MS 5000U
+#define PAIRING_BOND_SETTLE_MS 1000U
+#define PAIRING_RECONNECT_DELAY_MS 1000U
 
 #define CANON_NVS_NAMESPACE "canon_remote"
 #define CANON_NVS_ADDRESS_KEY "camera_addr"
@@ -46,6 +48,16 @@ static const ble_uuid128_t CANON_PAIRING_UUID =
     BLE_UUID128_INIT(CANON_PAIRING_UUID_LE_BYTES);
 static const ble_uuid128_t CANON_TRIGGER_UUID =
     BLE_UUID128_INIT(CANON_TRIGGER_UUID_LE_BYTES);
+static const struct ble_gap_conn_params CANON_CONNECTION_PARAMS = {
+    .scan_itvl = 16,
+    .scan_window = 16,
+    .itvl_min = 24,
+    .itvl_max = 24,
+    .latency = 0,
+    .supervision_timeout = 72,
+    .min_ce_len = 0,
+    .max_ce_len = 0,
+};
 
 typedef struct {
     EventGroupHandle_t events;
@@ -58,6 +70,8 @@ typedef struct {
     volatile bool ready;
     volatile bool scanning;
     volatile bool disconnect_requested;
+    volatile bool secure_on_connect;
+    volatile bool security_started_early;
     uint8_t own_address_type;
     ble_addr_t camera_address;
     ble_addr_t scan_address;
@@ -343,19 +357,28 @@ static void disconnect_after_failure(void)
     context.last_ble_error = failed_ble_error;
 }
 
-static esp_err_t connect_link(const ble_addr_t *address)
+static esp_err_t connect_link(const ble_addr_t *address,
+                              bool secure_on_connect)
 {
     context.operation_result = 0;
     context.ready = false;
     context.encrypted = false;
-    xEventGroupClearBits(context.events, EVENT_CONNECTED);
+    context.secure_on_connect = secure_on_connect;
+    context.security_started_early = false;
+    xEventGroupClearBits(context.events,
+                         EVENT_CONNECTED | EVENT_SECURITY_DONE);
     const int result = ble_gap_connect(
-        context.own_address_type, address, CONNECT_TIMEOUT_MS, NULL,
+        context.own_address_type, address, CONNECT_TIMEOUT_MS,
+        &CANON_CONNECTION_PARAMS,
         gap_event_handler, NULL);
     if (result != 0) {
+        context.secure_on_connect = false;
         return result_from_ble_error(result);
     }
-    return wait_for_event(EVENT_CONNECTED, CONNECT_TIMEOUT_MS + 1000U);
+    const esp_err_t wait_result =
+        wait_for_event(EVENT_CONNECTED, CONNECT_TIMEOUT_MS + 1000U);
+    context.secure_on_connect = false;
+    return wait_result;
 }
 
 static esp_err_t secure_link(void)
@@ -364,17 +387,24 @@ static esp_err_t secure_link(void)
     if (ble_gap_conn_find(context.connection_handle, &description) == 0 &&
         description.sec_state.encrypted) {
         context.encrypted = true;
+        context.security_started_early = false;
         context.last_ble_error = 0;
         return ESP_OK;
     }
 
-    context.operation_result = 0;
-    xEventGroupClearBits(context.events, EVENT_SECURITY_DONE);
-    const int result = ble_gap_security_initiate(context.connection_handle);
-    if (result != 0 && result != BLE_HS_EALREADY) {
-        return result_from_ble_error(result);
+    if (!context.security_started_early) {
+        context.operation_result = 0;
+        xEventGroupClearBits(context.events, EVENT_SECURITY_DONE);
+        const int result =
+            ble_gap_security_initiate(context.connection_handle);
+        if (result != 0 && result != BLE_HS_EALREADY) {
+            return result_from_ble_error(result);
+        }
     }
-    return wait_for_event(EVENT_SECURITY_DONE, SECURITY_TIMEOUT_MS);
+    const esp_err_t wait_result =
+        wait_for_event(EVENT_SECURITY_DONE, SECURITY_TIMEOUT_MS);
+    context.security_started_early = false;
+    return wait_result;
 }
 
 static esp_err_t connect_for_control(void)
@@ -392,7 +422,7 @@ static esp_err_t connect_for_control(void)
         }
     }
 
-    esp_err_t result = connect_link(&context.camera_address);
+    esp_err_t result = connect_link(&context.camera_address, true);
     if (result != ESP_OK) {
         return result;
     }
@@ -523,6 +553,13 @@ static int gap_event_handler(struct ble_gap_event *event, void *argument)
         if (event->connect.status == 0) {
             context.connection_handle = event->connect.conn_handle;
             context.connected = true;
+            if (context.secure_on_connect) {
+                const int security_result = ble_gap_security_initiate(
+                    event->connect.conn_handle);
+                context.security_started_early =
+                    security_result == 0 ||
+                    security_result == BLE_HS_EALREADY;
+            }
         } else {
             context.connection_handle = BLE_HS_CONN_HANDLE_NONE;
             context.connected = false;
@@ -536,9 +573,12 @@ static int gap_event_handler(struct ble_gap_event *event, void *argument)
         context.connected = false;
         context.encrypted = false;
         context.ready = false;
+        context.secure_on_connect = false;
+        context.security_started_early = false;
         context.connection_handle = BLE_HS_CONN_HANDLE_NONE;
         context.operation_result = requested ? 0 : event->disconnect.reason;
-        xEventGroupSetBits(context.events, EVENT_DISCONNECTED |
+        xEventGroupSetBits(context.events, EVENT_CONNECTED |
+                                              EVENT_DISCONNECTED |
                                               EVENT_DISCOVERY_DONE |
                                               EVENT_SECURITY_DONE);
         return 0;
@@ -646,7 +686,10 @@ esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
         result = scan_for_camera(scan_seconds);
     }
     if (result == ESP_OK) {
-        result = connect_link(&context.scan_address);
+        result = connect_link(&context.scan_address, true);
+    }
+    if (result == ESP_OK) {
+        result = secure_link();
     }
     if (result == ESP_OK) {
         result = discover_service();
@@ -670,10 +713,6 @@ esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
         result = result_from_ble_error(write_result);
     }
     if (result == ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(250U));
-        result = secure_link();
-    }
-    if (result == ESP_OK) {
         struct ble_gap_conn_desc description;
         const int find_result = ble_gap_conn_find(
             context.connection_handle, &description);
@@ -686,8 +725,10 @@ esp_err_t canon_ble_service_pair(uint32_t scan_seconds)
     }
 
     if (result == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(PAIRING_BOND_SETTLE_MS));
         const esp_err_t disconnect_result = disconnect_link();
         if (disconnect_result == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(PAIRING_RECONNECT_DELAY_MS));
             const esp_err_t reconnect_result = connect_for_control();
             if (reconnect_result != ESP_OK) {
                 ESP_LOGW(TAG, "Paired, but reconnect failed: %s (BLE %d)",
