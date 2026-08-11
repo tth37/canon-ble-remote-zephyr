@@ -123,6 +123,7 @@ $(HOST_TEST): tests/host/test_canon_protocol.c \
 
 test: $(HOST_TEST)
 	"$(HOST_TEST)"
+	$(PYTHON) tests/host/test_serial_terminal.py
 
 clean-all:
 	$(RM) -r "$(BUILD_ROOT)"

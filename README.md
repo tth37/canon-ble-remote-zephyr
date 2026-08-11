@@ -99,8 +99,10 @@ camera forget
 ```
 
 The serial helper sends one carriage return for Enter and leaves received CRLF
-untouched, preventing duplicate prompts and double-spaced output. Exit it with
-`Ctrl+]`.
+untouched, preventing duplicate prompts and double-spaced output. It also
+passes Zephyr's ANSI prompt and history-redraw sequences directly to the host
+terminal, so arrow-key history and colored prompts render normally. Exit it
+with `Ctrl+]`.
 
 ## Pair a Canon camera
 

@@ -75,13 +75,23 @@ def find_default_port() -> str:
 
 def apply_terminal_defaults(arguments: list[str]) -> list[str]:
     """Add defaults that pyserial's miniterm API does not expose directly."""
+    result = list(arguments)
     has_eol = any(
         argument == "--eol" or argument.startswith("--eol=")
         for argument in arguments
     )
-    if has_eol:
-        return arguments
-    return [*arguments, "--eol", DEFAULT_EOL]
+    has_filter = any(
+        argument in ("-f", "--filter") or argument.startswith("--filter=")
+        for argument in arguments
+    )
+    if not has_eol:
+        result.extend(("--eol", DEFAULT_EOL))
+    if not has_filter:
+        # Miniterm's implicit "default" filter replaces ESC with the visible
+        # U+241B control-picture glyph. Zephyr's shell uses ANSI sequences for
+        # prompt colors and command-history redraws, so receive them directly.
+        result.extend(("--filter", "direct"))
+    return result
 
 
 def main() -> None:
