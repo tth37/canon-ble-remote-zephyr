@@ -21,8 +21,13 @@
 
 LOG_MODULE_REGISTER(canon_remote, LOG_LEVEL_INF);
 
-#define CANON_REMOTE_NAME "ESP32 Remote"
+#define CANON_REMOTE_NAME CONFIG_BT_DEVICE_NAME
 #define CANON_SETTINGS_PEER_KEY "canon/peer"
+
+BUILD_ASSERT(sizeof(CANON_REMOTE_NAME) > 1U,
+             "Canon remote name must not be empty");
+BUILD_ASSERT(sizeof(CANON_REMOTE_NAME) - 1U <= CANON_REMOTE_NAME_MAX,
+             "Canon remote name exceeds the protocol limit");
 
 #define CANON_SCAN_INTERVAL 16U
 #define CANON_SCAN_WINDOW 16U
