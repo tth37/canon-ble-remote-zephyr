@@ -1,0 +1,19 @@
+manifest:
+  version: "1.2"
+
+  projects:
+    - name: zephyr
+      url: https://github.com/zephyrproject-rtos/zephyr
+      revision: v4.2.0
+      clone-depth: 1
+      import:
+        path-prefix: .platformio/zephyr-workspace
+        name-allowlist:
+          - cmsis
+          - cmsis_6
+          - hal_nordic
+          - mbedtls
+          - tinycrypt
+
+  self:
+    path: nrf52840

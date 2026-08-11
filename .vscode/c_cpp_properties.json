@@ -3,17 +3,14 @@
     {
       "name": "Selected firmware target",
       "compileCommands": "${workspaceFolder}/compile_commands.json",
-      "compilerPath": "${workspaceFolder}/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-gcc",
       "includePath": [
         "${workspaceFolder}/firmware/esp32c6/src/**",
-        "${workspaceFolder}/firmware/ch582m/include/**",
+        "${workspaceFolder}/firmware/nrf52840/src/**",
+        "${workspaceFolder}/firmware/nrf52840/build/zephyr/include/generated/**",
         "${workspaceFolder}/shared/canon/include/**",
-        "${workspaceFolder}/.cache/ch58x-sdk/EVT/EXAM/**",
+        "${workspaceFolder}/firmware/.platformio/zephyr-workspace/zephyr/include/**",
+        "${workspaceFolder}/firmware/.platformio/zephyr-workspace/modules/**",
         "${workspaceFolder}/.platformio/packages/framework-espidf/components/**"
-      ],
-      "defines": [
-        "ESP_PLATFORM",
-        "IDF_VER=\"v6.0.1\""
       ],
       "cStandard": "c17"
     }

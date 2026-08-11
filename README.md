@@ -1,21 +1,21 @@
-# Multi-target wireless serial services
+# Multi-target Canon BLE remote
 
-One repository now builds the serial command firmware for two microcontroller
-targets:
+This repository builds the same Canon BLE remote and serial command interface
+for two targets:
 
 | Target | SDK/backend | Available services | Validation |
 |---|---|---|---|
-| `esp32c6` | ESP-IDF 6 / NimBLE | system, Wi-Fi, Canon BLE remote | Build and on-board UART tested |
-| `ch582m` | WCH CH58x SDK / TMOS BLE | system, Canon BLE remote | Build and link tested; hardware test pending |
+| `esp32c6` | ESP-IDF 6 / NimBLE | system, Wi-Fi, Canon BLE remote | Built and tested on hardware with a Canon 200D II |
+| `nrf52840` | Zephyr 4.2 / native Bluetooth host | system, Canon BLE remote | Build and UF2 generation tested; hardware test pending |
 
 The display and joystick demos remain on their existing branches. This branch
-has no display or joystick dependency; both targets communicate over a
-115200-baud serial shell.
+has no display or joystick dependency. The ESP32-C6 uses its USB-to-UART
+bridge; the Pro Micro nRF52840 uses native USB CDC.
 
 ## Select a target
 
 The root Makefile reads the active target from the ignored `.target` file. If
-that file is absent, the safe default is `esp32c6`.
+the file is absent, the default is `esp32c6`.
 
 ```sh
 make select TARGET=esp32c6
@@ -24,10 +24,10 @@ make upload
 make serial
 ```
 
-Switch once, then keep using the ordinary commands:
+Switch once, then continue using the same ordinary commands:
 
 ```sh
-make select TARGET=ch582m
+make select TARGET=nrf52840
 make build
 ```
 
@@ -35,57 +35,65 @@ For CI or a one-off build, override the saved selection without changing it:
 
 ```sh
 make build TARGET=esp32c6
-make build TARGET=ch582m
+make build TARGET=nrf52840
 ```
 
-`make target` prints the effective selection and `make help` lists the common
-commands. Toolchains remain local to this repository under `.venv`,
-`.platformio`, and `.cache`; none are installed into the system Python.
+`make target` prints the effective selection. `make help` lists the common
+commands. Python packages, SDKs, and compilers stay inside `.venv`,
+`.platformio`, and ignored firmware workspace directories.
 
-## Build and flash
+## Build and flash ESP32-C6
 
-For ESP32-C6, PlatformIO drives ESP-IDF:
+PlatformIO drives ESP-IDF:
 
 ```sh
 make select TARGET=esp32c6
 make setup
 make build
 make upload
+make serial
 ```
 
-The configured ESP32-C6 serial device is `/dev/cu.usbserial-310`. Override
-automatic selection when necessary:
+The preferred ESP32-C6 serial device is `/dev/cu.usbserial-310`. Override
+automatic selection when needed:
 
 ```sh
 SERIAL_PORT=/dev/cu.usbserial-OTHER make serial
 ```
 
-For CH582M, setup sparsely fetches a pinned revision of the official
-`openwch/ch583` SDK, which also supports CH582M, and uses a repository-local
-RISC-V compiler, CMake, and Ninja. Build outputs are written to
-`.build/ch582m/` as ELF, Intel HEX, and raw binary files.
+## Build and flash Pro Micro nRF52840
+
+The nRF backend uses the official Zephyr 4.2
+[`promicro_nrf52840/nrf52840/uf2`](https://docs.zephyrproject.org/latest/boards/others/promicro_nrf52840/doc/index.html)
+board target. West fetches only the allowlisted Zephyr modules, while the ARM
+compiler, CMake, Ninja, West, and Python dependencies remain repository-local.
 
 ```sh
-make select TARGET=ch582m
-make setup
-make build
+make select TARGET=nrf52840
+make setup                 # first run downloads the pinned SDK and tools
+make build                 # creates firmware/nrf52840/build/zephyr/zephyr.uf2
 ```
 
-CH582M flashing is intentionally left behind an explicit `wchisp` dependency
-until the board is available:
+To flash, double-tap the board's reset pin/button so its UF2 drive mounts, then
+run:
 
 ```sh
-make upload                       # uses wchisp from PATH
-CH582M_FLASHER=/path/to/wchisp make upload
+make upload
+make serial
 ```
 
-The CH582M shell uses UART1 at 115200 baud: PA9 is TX and PA8 is RX. The final
-USB serial port and bootloader procedure must be verified with the actual
-devkit.
+If more than one UF2 drive is mounted, select it explicitly:
+
+```sh
+UF2_VOLUME=/Volumes/NICENANO make upload
+```
+
+`make serial` automatically looks for the board's native USB CDC port. You can
+override it with `SERIAL_PORT` on any platform.
 
 ## Serial commands
 
-Both backends expose the same Canon command vocabulary:
+Both backends expose the same Canon commands:
 
 ```text
 help
@@ -112,9 +120,9 @@ wifi status
 wifi leave
 ```
 
-`make serial` runs `tools/serial_terminal.py`. It transmits one carriage return
-for Enter and preserves received CRLF, avoiding both duplicate prompts and
-double-spaced output. Exit with `Ctrl+]`.
+The serial helper transmits one carriage return for Enter and preserves
+received CRLF, avoiding duplicate prompts and double-spaced output. Exit with
+`Ctrl+]`.
 
 Wi-Fi credentials on ESP32-C6 use `WIFI_STORAGE_RAM`; they are not compiled
 into the firmware or written to NVS. They remain visible while typed, so use
@@ -122,11 +130,11 @@ the serial shell only in a trusted environment.
 
 ## Canon BLE remote
 
-The Canon service is a native port of the protocol used by
+The protocol is a native C port of
 [maxmacstn/ESP32-Canon-BLE-Remote](https://github.com/maxmacstn/ESP32-Canon-BLE-Remote).
 Neither target depends on Arduino. Shared C11 code owns the Canon UUIDs,
-pairing/control packets, and stable saved-peer record; each firmware target
-owns its BLE lifecycle, bond store, scheduler, and serial integration.
+pairing/control packets, and stable peer record. Each firmware target owns its
+BLE lifecycle, bond database, scheduling, storage, and serial integration.
 
 To pair:
 
@@ -136,23 +144,33 @@ To pair:
 3. Finish any camera-side pairing prompt.
 4. Run `camera status`, then `camera shutter` or `camera focus`.
 
-The address record is portable, but vendor bond databases are not. Switching
-physical boards therefore requires pairing that board once. `camera forget`
-removes both its saved address and its backend-specific bond.
+The address record format is portable, but vendor bond databases are not.
+Switching physical boards requires pairing that board once. `camera forget`
+removes its saved address and backend-specific bond.
 
-The original project reports EOS M50 compatibility. Camera model and firmware
-behavior still need testing on the particular camera.
+Canon remote connections need encryption immediately after the physical BLE
+link is established. Both backends therefore start security in the connection
+callback and postpone GATT discovery until encryption succeeds. Initial
+registration writes the pairing characteristic, allows the bond to settle,
+disconnects, waits, then reconnects using the saved bond before enabling
+camera controls.
+
+ESP-IDF 6's NimBLE fork delays central connection callbacks until optional
+remote capability queries finish. Some Canon cameras disconnect before that
+delay expires. The ESP32-C6 pre-build script applies a checked local patch that
+restores the upstream Apache NimBLE callback order and fails safely on an
+unknown framework version.
 
 ## Repository structure
 
 ```text
 firmware/
-  esp32c6/             ESP-IDF project and NimBLE/Wi-Fi services
-  ch582m/              WCH CMake project, TMOS BLE service, UART shell
+  esp32c6/             ESP-IDF/NimBLE project and Wi-Fi services
+  nrf52840/            Zephyr project, native BLE adapter, USB CDC shell
 shared/canon/           vendor-neutral protocol and peer record code
 tests/host/             native tests for shared code
-third_party/            upstream attribution and SDK provenance
-tools/                  target-neutral serial and SDK setup helpers
+third_party/            upstream Canon remote attribution and license
+tools/                  serial terminal and UF2 upload helpers
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the backend boundary and
@@ -160,17 +178,17 @@ steps for adding another MCU. Run the portable tests with `make test`.
 
 ## VS Code, clangd, and IntelliSense
 
-Select the target, then generate that target's compilation database:
+Select a target, then generate its compilation database:
 
 ```sh
 make compile-commands
 ```
 
 The command points root `compile_commands.json` at the selected backend. The
-checked-in VS Code configuration uses the repository-local RISC-V toolchain;
-tasks are included for selection, build, upload, tests, database refresh, and
-serial. Enable only clangd or Microsoft C/C++ diagnostics if duplicate messages
-appear.
+checked-in editor settings recognize both repository-local cross-compilers.
+Tasks are included for target selection, build, upload, tests, database
+refresh, and serial. Enable only clangd or Microsoft C/C++ diagnostics if
+duplicate messages appear.
 
 ## Demo branches
 

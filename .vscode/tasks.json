@@ -18,9 +18,9 @@
       "problemMatcher": []
     },
     {
-      "label": "Firmware: Select CH582M",
+      "label": "Firmware: Select Pro Micro nRF52840",
       "type": "shell",
-      "command": "make select TARGET=ch582m",
+      "command": "make select TARGET=nrf52840",
       "problemMatcher": []
     },
     {

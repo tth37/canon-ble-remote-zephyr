@@ -13,14 +13,15 @@ from serial.tools import miniterm
 
 TARGET = os.environ.get("SERIAL_TARGET", "esp32c6")
 PREFERRED_PORT = "/dev/cu.usbserial-310" if TARGET == "esp32c6" else ""
-DEFAULT_BAUD = int(
-    os.environ.get(
-        "SERIAL_BAUD", os.environ.get("C6_SERIAL_BAUD", "115200")
-    )
+FALLBACK_PORT = (
+    "/dev/cu.usbserial-310"
+    if TARGET == "esp32c6"
+    else "/dev/cu.usbmodem-NRF52840"
 )
-DEFAULT_EOL = os.environ.get(
-    "SERIAL_EOL", os.environ.get("C6_SERIAL_EOL", "CR")
-).upper()
+LEGACY_BAUD = os.environ.get("C6_SERIAL_BAUD") if TARGET == "esp32c6" else None
+LEGACY_EOL = os.environ.get("C6_SERIAL_EOL") if TARGET == "esp32c6" else None
+DEFAULT_BAUD = int(os.environ.get("SERIAL_BAUD", LEGACY_BAUD or "115200"))
+DEFAULT_EOL = os.environ.get("SERIAL_EOL", LEGACY_EOL or "CR").upper()
 
 
 class TransmitCR(miniterm.Transform):
@@ -35,7 +36,7 @@ def find_default_port() -> str:
     configured_port = (
         os.environ.get("SERIAL_PORT")
         or os.environ.get(f"{TARGET.upper()}_SERIAL_PORT")
-        or os.environ.get("C6_SERIAL_PORT")
+        or (os.environ.get("C6_SERIAL_PORT") if TARGET == "esp32c6" else None)
     )
     if configured_port:
         return configured_port
@@ -44,7 +45,7 @@ def find_default_port() -> str:
         return PREFERRED_PORT
 
     usb_ports = [
-        port.device
+        port
         for port in list_ports.comports()
         if port.vid is not None
         and (
@@ -54,10 +55,19 @@ def find_default_port() -> str:
             or port.device.startswith("/dev/ttyACM")
         )
     ]
+    if TARGET == "nrf52840":
+        native_usb_ports = [
+            port.device
+            for port in usb_ports
+            if "usbmodem" in port.device.lower()
+            or "cdc" in (port.description or "").lower()
+        ]
+        if len(native_usb_ports) == 1:
+            return native_usb_ports[0]
     if len(usb_ports) == 1:
-        return usb_ports[0]
+        return usb_ports[0].device
 
-    return PREFERRED_PORT or "/dev/cu.usbserial-CH582M"
+    return PREFERRED_PORT or FALLBACK_PORT
 
 
 def apply_terminal_defaults(arguments: list[str]) -> list[str]:
@@ -82,7 +92,9 @@ def main() -> None:
     miniterm.main(
         default_port=find_default_port(),
         default_baudrate=DEFAULT_BAUD,
-        default_dtr=False,
+        # Zephyr's USB CDC shell waits for DTR. The ESP32-C6 UART bridge can
+        # use DTR as a reset signal, so keep it deasserted on that target.
+        default_dtr=TARGET == "nrf52840",
         default_rts=False,
     )
 
