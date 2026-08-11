@@ -1,89 +1,96 @@
-# Multi-target architecture
+# Zephyr-native architecture
 
-## Boundary
+## One application, multiple boards
 
-This repository uses compile-time target selection, not a runtime hardware
-abstraction layer. ESP-IDF and Zephyr have different schedulers, storage APIs,
-BLE hosts, and asynchronous lifecycle rules. Hiding those differences behind
-a lowest-common-denominator BLE interface would make the critical connection
-sequence less visible and harder to test.
+The firmware is one Zephyr application, not a dispatcher containing separate
+ESP32-C6 and nRF52840 projects. The same sources are compiled for both native
+Zephyr board targets. The root Makefile is a convenience interface around
+West; it does not model another framework or invent project-specific target
+names.
 
-Code is shared only where behavior is genuinely platform-independent:
+Board variation belongs in Zephyr's existing seams:
 
-- Canon service, pairing, and trigger UUID bytes
-- pairing and button packet construction
-- stable peer-address record encoding and validation
-- native host tests for those rules
+- Devicetree describes peripherals, pins, flash, and console devices.
+- `firmware/boards/<board>.conf` selects board-specific Kconfig policy.
+- Zephyr supplies the Bluetooth controller, host, storage, kernel, shell, and
+  flash APIs used by the application.
 
-Target projects own hardware and SDK policy:
+There is deliberately no custom HAL or application-level `if (esp32)` /
+`if (nrf52)` switch. A new Zephyr-supported board should need a configuration
+fragment, not a copied firmware backend.
 
-- `firmware/esp32c6` owns ESP-IDF tasks, NimBLE, NVS, Wi-Fi, and
-  `esp_console`.
-- `firmware/nrf52840` owns Zephyr Bluetooth callbacks, settings/NVS, kernel
-  synchronization, the shell, native USB CDC, and UF2 output.
+## Domain boundary
 
-The shared directory must not include ESP-IDF or Zephyr headers. Its public
-types use only standard C headers, and `make test` compiles it with the host
-compiler.
+`shared/canon` is the small portable core. It owns behavior that does not know
+about an RTOS or Bluetooth stack:
 
-## Build selection
+- Canon service, registration, and trigger UUID bytes
+- registration and button packet construction
+- the versioned, checksummed peer-address record
 
-The root Makefile is the stable interface. `make select TARGET=<name>` writes
-the developer-local `.target`; ordinary goals then dispatch to that firmware
-project. `TARGET=<name>` on an individual invocation is the stateless override
-for CI and scripts.
+It includes only standard C headers and is compiled by the host test in
+`make test`.
 
-Each target remains independently buildable and owns its generated output:
+`firmware/src/canon_ble_zephyr.c` is the cohesive Canon Remote module. It owns
+the BLE scan, connection, security, GATT discovery, bond/settings operations,
+and command synchronization as one lifecycle. These operations are tightly
+coupled by Canon's protocol ordering, so splitting them into generic scanning,
+storage, and GATT wrappers would obscure the state machine without creating a
+useful portability boundary.
 
-- ESP32-C6: `firmware/esp32c6/.pio`
-- Pro Micro nRF52840: `firmware/nrf52840/build`
+The shell is only an adapter: it parses user input, calls the Canon Remote
+module, and formats status. It does not own BLE state.
 
-The nRF target uses a local West workspace rooted at `firmware/`; its pinned
-Zephyr checkout and imported modules live under the ignored
-`firmware/.platformio/zephyr-workspace`. This keeps SDK state outside the
-application directory while still making setup reproducible.
+## Canon connection lifecycle
 
-PlatformIO still supplies the repository-local ARM compiler, CMake, and Ninja.
-Its Nordic platform currently pins Zephyr 2.7.1 and does not provide the
-official Pro Micro board target, so West owns Zephyr 4.2 and its module graph.
-This avoids maintaining a custom PlatformIO platform or a backported board
-definition.
+Canon remote control requires an encrypted link before GATT discovery. Initial
+pairing is a two-link transaction:
 
-Root `compile_commands.json` is a generated symlink to the selected target's
-database, so editor configuration does not encode the active MCU.
-
-## Canon BLE connection sequencing
-
-Canon remote connections require security as soon as the physical link is
-established. Neither backend may begin service or characteristic discovery on
-an unencrypted link.
-
-Initial pairing is a two-link transaction:
-
-1. Connect and initiate BLE security from the connection callback.
-2. After encryption succeeds, discover and write the Canon registration
+1. Scan for the Canon service and connect to the discovered identity.
+2. Start BLE security immediately from the connection callback.
+3. After encryption succeeds, discover and write the Canon registration
    characteristic.
-3. Save the identity address, allow the bond to settle, disconnect, and wait.
-4. Reconnect using the saved bond, restore encryption immediately, then
-   discover the trigger characteristic.
+4. Persist the identity address, allow the bond to settle, and disconnect.
+5. Reconnect with the saved bond, restore encryption immediately, and discover
+   the trigger characteristic.
+6. Mark controls ready only after the second link completes discovery.
 
-The ESP32-C6 adapter enforces this with NimBLE GAP events and
-`ble_gap_security_initiate`. The nRF52840 adapter enforces it with Zephyr
-connection/security callbacks, semaphores for command-side waits, and
-`bt_conn_set_security`. Both use the same proven scan and connection intervals
-and the same registration/button timing.
+Ordinary `camera connect` begins at step 5. `camera forget` deletes both the
+portable peer record and Zephyr's Bluetooth keys.
 
-## Adding another target
+The portable peer record can move between implementations, but Zephyr bond
+data belongs to the board's settings store. Copying a peer address does not
+copy its encryption keys.
 
-1. Add its name to `SUPPORTED_TARGETS` in the root Makefile.
-2. Create `firmware/<target>` with its SDK entry point and build files.
-3. Implement serial, storage, and the Canon BLE lifecycle using native SDK
-   mechanisms.
-4. Link `shared/canon/src/canon_protocol.c`; do not copy protocol constants.
-5. Add setup, build, upload, serial, clean, and compilation-database dispatch.
-6. Build with strict warnings, then validate boot, serial line endings,
-   pairing, bonded reconnect, shutter, focus, disconnect, and forget on real
-   hardware.
+## Toolchain ownership
 
-Feature parity stays explicit: ESP32-C6 exposes Wi-Fi commands, while nRF52840
-does not because it has no Wi-Fi radio.
+Dependency ownership is split by responsibility:
+
+- `requirements-tools.txt` pins the few Python/bootstrap executables this
+  repository invokes directly.
+- `firmware/west.yml` pins Zephyr and the module graph.
+- The selected Zephyr revision declares its own Python package requirements.
+- West installs the matching Zephyr SDK toolchains and Espressif blobs.
+
+This is preferable to duplicating Zephyr's evolving transitive Python
+requirements in this repository. A clean `make setup` reconstructs the local
+workspace without global compiler or Python package installs.
+
+The only supported application build path is `west build`. The Makefile adds
+selection persistence, setup markers, per-board build directories, host tests,
+and editor integration; it does not invoke PlatformIO.
+
+## Adding another Zephyr board
+
+1. Confirm the upstream Zephyr board target supports a serial console,
+   persistent settings, BLE central/GATT client, and SMP bonding.
+2. Add its exact board target to `SUPPORTED_BOARDS` in the root Makefile.
+3. Add a board Kconfig fragment only if the common `prj.conf` is insufficient.
+4. Add its compiler architecture to the `west sdk install` toolchain list if
+   ARM or RISC-V does not cover it.
+5. Build with strict warnings, then test boot, serial input, pairing, bonded
+   reconnect, focus, shutter, disconnect, forget, and power-cycle reconnect on
+   real hardware.
+
+If a future target is not supported by Zephyr, keep it as a separate project
+rather than weakening this application's boundary with a pseudo-Zephyr HAL.

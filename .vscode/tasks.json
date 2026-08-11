@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Firmware: Build selected target",
+      "label": "Zephyr: Build selected board",
       "type": "shell",
       "command": "make build",
       "group": {
@@ -14,17 +14,17 @@
     {
       "label": "Firmware: Select ESP32-C6",
       "type": "shell",
-      "command": "make select TARGET=esp32c6",
+      "command": "make select BOARD=esp32c6_devkitc/esp32c6/hpcore",
       "problemMatcher": []
     },
     {
       "label": "Firmware: Select Pro Micro nRF52840",
       "type": "shell",
-      "command": "make select TARGET=nrf52840",
+      "command": "make select BOARD=promicro_nrf52840/nrf52840/uf2",
       "problemMatcher": []
     },
     {
-      "label": "Firmware: Upload selected target",
+      "label": "Zephyr: Flash selected board",
       "type": "shell",
       "command": "make upload",
       "problemMatcher": []

@@ -1,16 +1,14 @@
 {
   "configurations": [
     {
-      "name": "Selected firmware target",
+      "name": "Selected Zephyr board",
       "compileCommands": "${workspaceFolder}/compile_commands.json",
       "includePath": [
-        "${workspaceFolder}/firmware/esp32c6/src/**",
-        "${workspaceFolder}/firmware/nrf52840/src/**",
-        "${workspaceFolder}/firmware/nrf52840/build/zephyr/include/generated/**",
+        "${workspaceFolder}/firmware/src/**",
+        "${workspaceFolder}/.build/**/zephyr/include/generated/**",
         "${workspaceFolder}/shared/canon/include/**",
-        "${workspaceFolder}/firmware/.platformio/zephyr-workspace/zephyr/include/**",
-        "${workspaceFolder}/firmware/.platformio/zephyr-workspace/modules/**",
-        "${workspaceFolder}/.platformio/packages/framework-espidf/components/**"
+        "${workspaceFolder}/.zephyr/zephyr/include/**",
+        "${workspaceFolder}/.zephyr/modules/**"
       ],
       "cStandard": "c17"
     }

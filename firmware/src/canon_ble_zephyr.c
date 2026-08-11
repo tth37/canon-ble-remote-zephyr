@@ -21,7 +21,7 @@
 
 LOG_MODULE_REGISTER(canon_ble, LOG_LEVEL_INF);
 
-#define CANON_REMOTE_NAME "nRF Remote"
+#define CANON_REMOTE_NAME "ESP32 Remote"
 #define CANON_SETTINGS_PEER_KEY "canon/peer"
 
 #define CANON_SCAN_INTERVAL 16U

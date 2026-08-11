@@ -7,13 +7,14 @@ manifest:
       revision: v4.2.0
       clone-depth: 1
       import:
-        path-prefix: .platformio/zephyr-workspace
+        path-prefix: .zephyr
         name-allowlist:
           - cmsis
           - cmsis_6
+          - hal_espressif
           - hal_nordic
           - mbedtls
           - tinycrypt
 
   self:
-    path: nrf52840
+    path: firmware

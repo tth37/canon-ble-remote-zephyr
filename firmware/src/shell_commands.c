@@ -176,7 +176,7 @@ static int command_sysinfo(const struct shell *shell, size_t argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    shell_print(shell, "Target: Pro Micro nRF52840 (Cortex-M4F)");
+    shell_print(shell, "Target: %s", CONFIG_BOARD_TARGET);
     shell_print(shell, "Zephyr: %s", KERNEL_VERSION_STRING);
     shell_print(shell, "Uptime: %lld s",
                 (long long)(k_uptime_get() / 1000));
@@ -196,4 +196,4 @@ static int command_reboot(const struct shell *shell, size_t argc, char **argv)
     return 0;
 }
 
-SHELL_CMD_REGISTER(reboot, NULL, "Restart the nRF52840", command_reboot);
+SHELL_CMD_REGISTER(reboot, NULL, "Restart the board", command_reboot);

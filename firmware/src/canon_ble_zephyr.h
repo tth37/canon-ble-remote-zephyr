@@ -41,4 +41,3 @@ void canon_ble_zephyr_get_status(canon_zephyr_status_t *status);
 const char *canon_ble_zephyr_result_name(canon_zephyr_result_t result);
 
 #endif
-

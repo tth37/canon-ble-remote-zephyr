@@ -12,7 +12,7 @@ int main(void)
         LOG_ERR("Canon BLE initialization failed: %s",
                 canon_ble_zephyr_result_name(result));
     } else {
-        LOG_INF("Pro Micro nRF52840 serial services ready");
+        LOG_INF("Canon remote ready on %s", CONFIG_BOARD_TARGET);
     }
 
     return 0;

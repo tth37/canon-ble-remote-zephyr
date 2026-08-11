@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open an interactive serial terminal for the selected firmware target."""
+"""Open the Zephyr serial shell for the selected board."""
 
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ from serial.tools import list_ports
 from serial.tools import miniterm
 
 
-TARGET = os.environ.get("SERIAL_TARGET", "esp32c6")
+BOARD = os.environ.get(
+    "ZEPHYR_BOARD", "esp32c6_devkitc/esp32c6/hpcore"
+)
+TARGET = "nrf52840" if BOARD.startswith("promicro_nrf52840/") else "esp32c6"
 PREFERRED_PORT = "/dev/cu.usbserial-310" if TARGET == "esp32c6" else ""
 FALLBACK_PORT = (
     "/dev/cu.usbserial-310"
@@ -83,8 +86,8 @@ def apply_terminal_defaults(arguments: list[str]) -> list[str]:
 
 def main() -> None:
     """Run pyserial's interactive terminal with project-friendly defaults."""
-    # ESP-IDF accepts CR or LF as Enter. Miniterm's CRLF default therefore
-    # submits two empty lines and prints two prompts for a single key press.
+    # Zephyr's shell accepts CR or LF as Enter. Miniterm's CRLF default would
+    # submit two lines and print two prompts for a single key press.
     sys.argv[1:] = apply_terminal_defaults(sys.argv[1:])
     # Pyserial's built-in CR mode also maps received CR to LF, turning the
     # board's CRLF output into LFLF. Only alter the transmit direction.
