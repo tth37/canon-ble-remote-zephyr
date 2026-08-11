@@ -42,6 +42,7 @@ typedef struct {
 
 canon_remote_result_t canon_remote_initialize(void);
 canon_remote_result_t canon_remote_pair(uint32_t scan_seconds);
+canon_remote_result_t canon_remote_cancel_pairing(void);
 canon_remote_result_t canon_remote_connect(void);
 canon_remote_result_t canon_remote_disconnect(void);
 canon_remote_result_t canon_remote_forget(void);
