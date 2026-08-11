@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open an interactive serial terminal for the selected firmware target."""
+"""Open an interactive serial terminal for the ESP32-C6 firmware."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from serial.tools import list_ports
 from serial.tools import miniterm
 
 
-TARGET = os.environ.get("SERIAL_TARGET", "esp32c6")
-PREFERRED_PORT = "/dev/cu.usbserial-310" if TARGET == "esp32c6" else ""
+TARGET = "esp32c6"
+PREFERRED_PORT = "/dev/cu.usbserial-310"
 DEFAULT_BAUD = int(
     os.environ.get(
         "SERIAL_BAUD", os.environ.get("C6_SERIAL_BAUD", "115200")
@@ -57,7 +57,7 @@ def find_default_port() -> str:
     if len(usb_ports) == 1:
         return usb_ports[0]
 
-    return PREFERRED_PORT or "/dev/cu.usbserial-CH582M"
+    return PREFERRED_PORT
 
 
 def apply_terminal_defaults(arguments: list[str]) -> list[str]:

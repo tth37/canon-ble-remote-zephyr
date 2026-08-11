@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Firmware: Build selected target",
+      "label": "Firmware: Build ESP32-C6",
       "type": "shell",
       "command": "make build",
       "group": {
@@ -12,19 +12,7 @@
       "problemMatcher": "$gcc"
     },
     {
-      "label": "Firmware: Select ESP32-C6",
-      "type": "shell",
-      "command": "make select TARGET=esp32c6",
-      "problemMatcher": []
-    },
-    {
-      "label": "Firmware: Select CH582M",
-      "type": "shell",
-      "command": "make select TARGET=ch582m",
-      "problemMatcher": []
-    },
-    {
-      "label": "Firmware: Upload selected target",
+      "label": "Firmware: Upload ESP32-C6",
       "type": "shell",
       "command": "make upload",
       "problemMatcher": []

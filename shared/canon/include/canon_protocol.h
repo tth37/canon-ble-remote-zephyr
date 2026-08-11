@@ -11,7 +11,7 @@
 #define CANON_PEER_ADDRESS_SIZE 6U
 #define CANON_PEER_RECORD_SIZE 16U
 
-/* Bluetooth UUID byte order, suitable for both NimBLE and WCH ATT APIs. */
+/* Bluetooth UUID byte order used by the NimBLE adapter. */
 #define CANON_SERVICE_UUID_LE_BYTES                                         \
     0x21, 0xa8, 0xff, 0x2f, 0x49, 0xd8, 0x00, 0x00,                      \
         0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00

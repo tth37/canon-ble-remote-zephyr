@@ -1,5 +1,6 @@
 .pio/
 .platformio/
+.west/
 .venv/
 __pycache__/
 *.pyc
