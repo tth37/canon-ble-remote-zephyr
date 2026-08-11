@@ -39,14 +39,26 @@ bool canon_protocol_make_pairing_packet(const char *remote_name,
 
 uint8_t canon_protocol_button_press(canon_button_t button)
 {
-    return CANON_CONTROL_MODE_IMMEDIATE |
-           (button == CANON_BUTTON_FOCUS ? CANON_CONTROL_FOCUS
-                                         : CANON_CONTROL_SHUTTER);
+    return canon_protocol_button_state(button == CANON_BUTTON_FOCUS,
+                                       button == CANON_BUTTON_SHUTTER);
 }
 
 uint8_t canon_protocol_button_release(void)
 {
-    return CANON_CONTROL_MODE_IMMEDIATE;
+    return canon_protocol_button_state(false, false);
+}
+
+uint8_t canon_protocol_button_state(bool focus_pressed,
+                                    bool shutter_pressed)
+{
+    uint8_t state = CANON_CONTROL_MODE_IMMEDIATE;
+    if (focus_pressed) {
+        state |= CANON_CONTROL_FOCUS;
+    }
+    if (shutter_pressed) {
+        state |= CANON_CONTROL_SHUTTER;
+    }
+    return state;
 }
 
 static uint32_t record_checksum(const uint8_t *bytes, size_t length)

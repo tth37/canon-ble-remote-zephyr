@@ -36,6 +36,8 @@ bool canon_protocol_make_pairing_packet(const char *remote_name,
                                         canon_packet_t *packet);
 uint8_t canon_protocol_button_press(canon_button_t button);
 uint8_t canon_protocol_button_release(void);
+uint8_t canon_protocol_button_state(bool focus_pressed,
+                                    bool shutter_pressed);
 
 /* Stable storage encoding; never persist a vendor BLE address structure. */
 bool canon_peer_record_encode(uint8_t address_type,

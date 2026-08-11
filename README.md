@@ -90,8 +90,8 @@ reboot
 camera help
 camera pair [seconds]
 camera connect
-camera shutter
-camera focus
+camera shutter [press|release]
+camera focus [press|release]
 camera status
 camera disconnect
 camera forget
@@ -102,6 +102,38 @@ untouched, preventing duplicate prompts and double-spaced output. It also
 passes Zephyr's ANSI prompt and history-redraw sequences directly to the host
 terminal, so arrow-key history and colored prompts render normally. Exit it
 with `Ctrl+]`.
+
+## Physical button integration
+
+GPIO interrupt handlers must call `canon_remote_set_button()` rather than the
+synchronous `canon_remote_focus()` or `canon_remote_shutter()` pulse helpers.
+The state API is non-blocking and ISR-safe: it only updates atomics and wakes a
+dedicated Canon button thread. Debouncing remains the responsibility of the
+board-specific GPIO layer.
+
+```c
+canon_remote_set_button(CANON_REMOTE_BUTTON_FOCUS, true);   /* pressed */
+canon_remote_set_button(CANON_REMOTE_BUTTON_FOCUS, false);  /* released */
+```
+
+The worker has a six-second total setup deadline. If every physical button is
+released while connection, security, or discovery is pending, it notices
+within approximately 20 ms and cancels the BLE procedure. It never reconnects
+solely to deliver a release: a lost BLE link already releases the camera-side
+state. Any failed state write forces a disconnect instead of leaving an
+uncertain pressed state.
+
+An established encrypted link normally stays idle between presses. That keeps
+button latency low and does not block the CPU, shell, or GPIO handling. Use the
+following commands to exercise the future physical-button path before GPIOs
+are added:
+
+```text
+camera focus press
+camera focus release
+camera shutter press
+camera shutter release
+```
 
 ## Pair a Canon camera
 

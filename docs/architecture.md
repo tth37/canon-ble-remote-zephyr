@@ -38,6 +38,14 @@ creating useful seams.
 The shell is only an adapter: it parses user input, calls the Canon Remote
 module, and formats status. It does not own BLE state.
 
+Physical button edges use the module's non-blocking state API. Atomic desired
+state is consumed by a dedicated worker thread, keeping all connection,
+security, discovery, and GATT waits out of GPIO interrupt and system-workqueue
+context. A release-to-idle transition cancels in-flight setup; connection
+callbacks and the worker coordinate through synchronized connection ownership
+and bounded waits. Maintenance commands are rejected as busy while a physical
+button is requested or applied so they cannot delay a required release.
+
 ## Canon connection lifecycle
 
 Canon remote control requires an encrypted link before GATT discovery. Initial
