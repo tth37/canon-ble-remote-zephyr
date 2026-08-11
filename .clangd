@@ -1,9 +1,12 @@
 CompileFlags:
-  # PlatformIO emits a GCC compilation database. Apple clangd understands the
-  # target and include paths, but these ESP GCC-only driver flags are invalid.
+  # Zephyr emits a GCC compilation database. Apple clangd understands the
+  # target and include paths, but not every GCC-only driver option.
   Remove:
     - -fno-shrink-wrap
     - -fstrict-volatile-bitfields
     - -fno-tree-switch-conversion
     - -fzero-init-padding-bits=all
     - -fno-malloc-dce
+    - -fno-printf-return-value
+    - -mfp16-format=*
+    - -fno-reorder-functions

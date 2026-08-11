@@ -1,6 +1,8 @@
 .pio/
 .platformio/
 .west/
+.zephyr/
+.zephyr-sdk/
 .venv/
 __pycache__/
 *.pyc
@@ -10,6 +12,5 @@ sdkconfig.*
 !sdkconfig.defaults
 compile_commands.json
 .cache/
-.target
+.board
 .build/
-firmware/*/compile_commands.json

@@ -1,5 +1,5 @@
-#ifndef CANON_PROTOCOL_H
-#define CANON_PROTOCOL_H
+#ifndef CANON_PROTOCOL_INTERNAL_H
+#define CANON_PROTOCOL_INTERNAL_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -11,7 +11,7 @@
 #define CANON_PEER_ADDRESS_SIZE 6U
 #define CANON_PEER_RECORD_SIZE 16U
 
-/* Bluetooth UUID byte order used by the NimBLE adapter. */
+/* Bluetooth UUID byte order, suitable for NimBLE and Zephyr GATT APIs. */
 #define CANON_SERVICE_UUID_LE_BYTES                                         \
     0x21, 0xa8, 0xff, 0x2f, 0x49, 0xd8, 0x00, 0x00,                      \
         0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00
@@ -32,14 +32,12 @@ typedef struct {
     uint8_t length;
 } canon_packet_t;
 
-extern const uint8_t canon_service_uuid_le[CANON_UUID_SIZE];
-extern const uint8_t canon_pairing_uuid_le[CANON_UUID_SIZE];
-extern const uint8_t canon_trigger_uuid_le[CANON_UUID_SIZE];
-
 bool canon_protocol_make_pairing_packet(const char *remote_name,
                                         canon_packet_t *packet);
 uint8_t canon_protocol_button_press(canon_button_t button);
 uint8_t canon_protocol_button_release(void);
+uint8_t canon_protocol_button_state(bool focus_pressed,
+                                    bool shutter_pressed);
 
 /* Stable storage encoding; never persist a vendor BLE address structure. */
 bool canon_peer_record_encode(uint8_t address_type,

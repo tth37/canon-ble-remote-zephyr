@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open an interactive serial terminal for the ESP32-C6 firmware."""
+"""Open the Zephyr serial shell for the selected board."""
 
 from __future__ import annotations
 
@@ -11,16 +11,20 @@ from serial.tools import list_ports
 from serial.tools import miniterm
 
 
-TARGET = "esp32c6"
-PREFERRED_PORT = "/dev/cu.usbserial-310"
-DEFAULT_BAUD = int(
-    os.environ.get(
-        "SERIAL_BAUD", os.environ.get("C6_SERIAL_BAUD", "115200")
-    )
+BOARD = os.environ.get(
+    "ZEPHYR_BOARD", "esp32c6_devkitc/esp32c6/hpcore"
 )
-DEFAULT_EOL = os.environ.get(
-    "SERIAL_EOL", os.environ.get("C6_SERIAL_EOL", "CR")
-).upper()
+TARGET = "nrf52840" if BOARD.startswith("promicro_nrf52840/") else "esp32c6"
+PREFERRED_PORT = "/dev/cu.usbserial-310" if TARGET == "esp32c6" else ""
+FALLBACK_PORT = (
+    "/dev/cu.usbserial-310"
+    if TARGET == "esp32c6"
+    else "/dev/cu.usbmodem-NRF52840"
+)
+LEGACY_BAUD = os.environ.get("C6_SERIAL_BAUD") if TARGET == "esp32c6" else None
+LEGACY_EOL = os.environ.get("C6_SERIAL_EOL") if TARGET == "esp32c6" else None
+DEFAULT_BAUD = int(os.environ.get("SERIAL_BAUD", LEGACY_BAUD or "115200"))
+DEFAULT_EOL = os.environ.get("SERIAL_EOL", LEGACY_EOL or "CR").upper()
 
 
 class TransmitCR(miniterm.Transform):
@@ -35,7 +39,7 @@ def find_default_port() -> str:
     configured_port = (
         os.environ.get("SERIAL_PORT")
         or os.environ.get(f"{TARGET.upper()}_SERIAL_PORT")
-        or os.environ.get("C6_SERIAL_PORT")
+        or (os.environ.get("C6_SERIAL_PORT") if TARGET == "esp32c6" else None)
     )
     if configured_port:
         return configured_port
@@ -44,7 +48,7 @@ def find_default_port() -> str:
         return PREFERRED_PORT
 
     usb_ports = [
-        port.device
+        port
         for port in list_ports.comports()
         if port.vid is not None
         and (
@@ -54,27 +58,46 @@ def find_default_port() -> str:
             or port.device.startswith("/dev/ttyACM")
         )
     ]
+    if TARGET == "nrf52840":
+        native_usb_ports = [
+            port.device
+            for port in usb_ports
+            if "usbmodem" in port.device.lower()
+            or "cdc" in (port.description or "").lower()
+        ]
+        if len(native_usb_ports) == 1:
+            return native_usb_ports[0]
     if len(usb_ports) == 1:
-        return usb_ports[0]
+        return usb_ports[0].device
 
-    return PREFERRED_PORT
+    return PREFERRED_PORT or FALLBACK_PORT
 
 
 def apply_terminal_defaults(arguments: list[str]) -> list[str]:
     """Add defaults that pyserial's miniterm API does not expose directly."""
+    result = list(arguments)
     has_eol = any(
         argument == "--eol" or argument.startswith("--eol=")
         for argument in arguments
     )
-    if has_eol:
-        return arguments
-    return [*arguments, "--eol", DEFAULT_EOL]
+    has_filter = any(
+        argument in ("-f", "--filter") or argument.startswith("--filter=")
+        for argument in arguments
+    )
+    if not has_eol:
+        result.extend(("--eol", DEFAULT_EOL))
+    if not has_filter:
+        # Miniterm's implicit "default" filter replaces ESC with the visible
+        # U+241B control-picture glyph. Zephyr's shell uses ANSI sequences for
+        # prompt colors and command-history redraws, so receive them directly.
+        result.extend(("--filter", "direct"))
+    return result
 
 
 def main() -> None:
     """Run pyserial's interactive terminal with project-friendly defaults."""
-    # ESP-IDF accepts CR or LF as Enter. Miniterm's CRLF default therefore
-    # submits two empty lines and prints two prompts for a single key press.
+    # Zephyr's shell accepts CR or LF as Enter. Miniterm's CRLF default would
+    # submit two lines and print two prompts for a single key press.
     sys.argv[1:] = apply_terminal_defaults(sys.argv[1:])
     # Pyserial's built-in CR mode also maps received CR to LF, turning the
     # board's CRLF output into LFLF. Only alter the transmit direction.
@@ -82,7 +105,9 @@ def main() -> None:
     miniterm.main(
         default_port=find_default_port(),
         default_baudrate=DEFAULT_BAUD,
-        default_dtr=False,
+        # Zephyr's USB CDC shell waits for DTR. The ESP32-C6 UART bridge can
+        # use DTR as a reset signal, so keep it deasserted on that target.
+        default_dtr=TARGET == "nrf52840",
         default_rts=False,
     )
 

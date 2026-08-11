@@ -1,65 +1,113 @@
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-PLATFORMIO_CORE_DIR := $(ROOT)/.platformio
-IDF_COMPONENT_MANAGER := 0
-export PLATFORMIO_CORE_DIR IDF_COMPONENT_MANAGER
+BOARD_FILE := $(ROOT)/.board
+DEFAULT_BOARD := esp32c6_devkitc/esp32c6/hpcore
+SUPPORTED_BOARDS := \
+	esp32c6_devkitc/esp32c6/hpcore \
+	promicro_nrf52840/nrf52840/uf2
+SAVED_BOARD := $(strip $(shell test -f "$(BOARD_FILE)" && sed -n '1p' "$(BOARD_FILE)"))
+BOARD ?= $(if $(SAVED_BOARD),$(SAVED_BOARD),$(DEFAULT_BOARD))
 
-PLATFORMIO := $(ROOT)/.venv/bin/pio
+ifeq ($(filter $(BOARD),$(SUPPORTED_BOARDS)),)
+$(error Unsupported BOARD '$(BOARD)'; choose one of: $(SUPPORTED_BOARDS))
+endif
+
 PYTHON := $(ROOT)/.venv/bin/python
-FIRMWARE_DIR := $(ROOT)/firmware/esp32c6
-BUILD_ROOT := $(ROOT)/.build
-HOST_CC ?= cc
-HOST_TEST := $(BUILD_ROOT)/host/test_canon_protocol
+WEST := $(ROOT)/.venv/bin/west
+TOOLS_MARKER := $(ROOT)/.venv/.zephyr-tools-v2
+export PATH := $(ROOT)/.venv/bin:$(PATH)
+WEST_CONFIG := $(ROOT)/.west/config
+ZEPHYR_BASE := $(ROOT)/.zephyr/zephyr
+ZEPHYR_VERSION := 4.2.0
+ZEPHYR_SDK_VERSION := 0.17.2
+ZEPHYR_PROJECTS_MARKER := $(ROOT)/.zephyr/.updated-v$(ZEPHYR_VERSION)
+ZEPHYR_PACKAGES_MARKER := $(ROOT)/.venv/.zephyr-packages-v$(ZEPHYR_VERSION)
+ZEPHYR_BLOBS_MARKER := $(ROOT)/.zephyr/.hal-espressif-blobs-v$(ZEPHYR_VERSION)
+ZEPHYR_SDK_INSTALL_DIR := $(ROOT)/.zephyr-sdk
+ZEPHYR_SDK_MARKER := $(ZEPHYR_SDK_INSTALL_DIR)/.installed-sdk-$(ZEPHYR_SDK_VERSION)
+export ZEPHYR_BASE ZEPHYR_SDK_INSTALL_DIR
 
-.PHONY: help setup build upload monitor serial test compile-commands clean \
-        clean-all
+BOARD_KEY := $(subst /,_,$(BOARD))
+BUILD_ROOT := $(ROOT)/.build
+BUILD_DIR := $(BUILD_ROOT)/$(BOARD_KEY)
+
+.PHONY: help board select setup build upload flash serial \
+	compile-commands clean pristine clean-all
 
 help:
-	@echo "ESP32-C6 Canon BLE remote (ESP-IDF/NimBLE)"
+	@echo "Zephyr Canon BLE remote"
 	@echo ""
-	@echo "  make setup             Install the local PlatformIO environment"
-	@echo "  make build             Build the firmware"
-	@echo "  make upload            Flash the connected ESP32-C6"
-	@echo "  make serial            Open the interactive serial terminal"
-	@echo "  make test              Run the portable Canon protocol tests"
-	@echo "  make compile-commands  Refresh clangd/IntelliSense data"
+	@echo "Selected BOARD: $(BOARD)"
+	@echo ""
+	@echo "  make select BOARD=<board>  Save the active Zephyr board"
+	@echo "  make setup                 Install West, Zephyr, SDK, and blobs locally"
+	@echo "  make build                 Run west build for the active board"
+	@echo "  make upload                Run west flash for the active board"
+	@echo "  make serial                Open the interactive serial shell"
+	@echo "  make compile-commands      Refresh editor compile commands"
+	@echo "  make pristine              Remove the active Zephyr build directory"
+	@echo ""
+	@echo "Supported boards:"
+	@$(foreach item,$(SUPPORTED_BOARDS),echo "  $(item)";)
 
-$(PLATFORMIO):
+board:
+	@echo "$(BOARD)"
+
+select:
+	@printf '%s\n' "$(BOARD)" > "$(BOARD_FILE)"
+	@echo "Selected Zephyr board: $(BOARD)"
+
+$(PYTHON):
 	uv venv --python 3.13 "$(ROOT)/.venv"
-	uv pip install --python "$(PYTHON)" pip platformio==6.1.18 pyserial==3.5
 
-setup: $(PLATFORMIO)
+$(TOOLS_MARKER): $(PYTHON) requirements-tools.txt
+	uv pip install --python "$(PYTHON)" \
+		-r "$(ROOT)/requirements-tools.txt"
+	touch "$@"
+
+$(WEST_CONFIG): $(TOOLS_MARKER) firmware/west.yml
+	@if test ! -f "$(WEST_CONFIG)"; then \
+		$(WEST) init -l "$(ROOT)/firmware"; \
+	fi
+
+$(ZEPHYR_PROJECTS_MARKER): $(WEST_CONFIG) firmware/west.yml
+	$(WEST) update
+	touch "$@"
+
+$(ZEPHYR_PACKAGES_MARKER): $(ZEPHYR_PROJECTS_MARKER)
+	$(WEST) packages pip --install
+	touch "$@"
+
+$(ZEPHYR_BLOBS_MARKER): $(ZEPHYR_PROJECTS_MARKER)
+	$(WEST) blobs fetch hal_espressif
+	touch "$@"
+
+$(ZEPHYR_SDK_MARKER): $(ZEPHYR_PROJECTS_MARKER)
+	$(WEST) sdk install --install-dir "$(ZEPHYR_SDK_INSTALL_DIR)" \
+		--toolchains arm-zephyr-eabi riscv64-zephyr-elf
+	touch "$@"
+
+setup: $(ZEPHYR_PACKAGES_MARKER) $(ZEPHYR_BLOBS_MARKER) \
+	$(ZEPHYR_SDK_MARKER)
 
 build: setup
-	$(PLATFORMIO) run --project-dir "$(FIRMWARE_DIR)"
+	$(WEST) build --build-dir "$(BUILD_DIR)" --board "$(BOARD)" \
+		--pristine=auto "$(ROOT)/firmware"
 
-upload: setup
-	$(PLATFORMIO) run --project-dir "$(FIRMWARE_DIR)" --target upload
+upload flash: build
+	$(WEST) flash --build-dir "$(BUILD_DIR)" $(FLASH_ARGS)
 
-monitor: setup
-	$(PLATFORMIO) device monitor --project-dir "$(FIRMWARE_DIR)"
+serial: $(TOOLS_MARKER)
+	ZEPHYR_BOARD="$(BOARD)" $(PYTHON) tools/serial_terminal.py $(ARGS)
 
-serial: setup
-	SERIAL_TARGET=esp32c6 $(PYTHON) tools/serial_terminal.py $(ARGS)
-
-compile-commands: setup
-	$(PLATFORMIO) run --project-dir "$(FIRMWARE_DIR)" --target compiledb
-	ln -sfn "$(FIRMWARE_DIR)/compile_commands.json" \
+compile-commands: build
+	ln -sfn "$(BUILD_DIR)/compile_commands.json" \
 		"$(ROOT)/compile_commands.json"
 
 clean: setup
-	$(PLATFORMIO) run --project-dir "$(FIRMWARE_DIR)" --target clean
+	$(WEST) build --build-dir "$(BUILD_DIR)" -t clean
 
-$(HOST_TEST): tests/host/test_canon_protocol.c \
-              shared/canon/src/canon_protocol.c \
-              shared/canon/include/canon_protocol.h
-	mkdir -p "$(dir $(HOST_TEST))"
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -pedantic \
-		-Ishared/canon/include \
-		tests/host/test_canon_protocol.c shared/canon/src/canon_protocol.c \
-		-o "$(HOST_TEST)"
-
-test: $(HOST_TEST)
-	"$(HOST_TEST)"
+pristine:
+	$(RM) -r "$(BUILD_DIR)"
 
 clean-all:
-	$(RM) -r "$(BUILD_ROOT)" "$(FIRMWARE_DIR)/.pio"
+	$(RM) -r "$(BUILD_ROOT)"

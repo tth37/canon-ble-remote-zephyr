@@ -1,11 +1,10 @@
 {
   "C_Cpp.default.compileCommands": "${workspaceFolder}/compile_commands.json",
-  "C_Cpp.default.compilerPath": "${workspaceFolder}/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-gcc",
   "clangd.arguments": [
     "--background-index",
     "--compile-commands-dir=${workspaceFolder}",
     "--header-insertion=never",
-    "--query-driver=${workspaceFolder}/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-*"
+    "--query-driver=${workspaceFolder}/.zephyr-sdk/riscv64-zephyr-elf/bin/riscv64-zephyr-elf-*,${workspaceFolder}/.zephyr-sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-*"
   ],
   "clangd.checkUpdates": false,
   "files.associations": {
