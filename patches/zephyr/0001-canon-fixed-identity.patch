@@ -1,0 +1,53 @@
+diff --git a/subsys/bluetooth/host/id.c b/subsys/bluetooth/host/id.c
+index dca77cd0b0..504fad53e3 100644
+--- a/subsys/bluetooth/host/id.c
++++ b/subsys/bluetooth/host/id.c
+@@ -1744,7 +1744,22 @@ int bt_id_set_create_conn_own_addr(bool use_filter, uint8_t *own_addr_type)
+ 		return -EINVAL;
+ 	}
+ 
+-	if (IS_ENABLED(CONFIG_BT_PRIVACY)) {
++	if (IS_ENABLED(CONFIG_CANON_REMOTE_FIXED_IDENTITY)) {
++		/* Distribute an IRK while initiating direct connections from the
++		 * fixed identity address for Canon interoperability.
++		 */
++		const bt_addr_le_t *addr = &bt_dev.id_addr[BT_ID_DEFAULT];
++
++		if (addr->type == BT_ADDR_LE_RANDOM) {
++			err = set_random_address(&addr->a);
++			if (err) {
++				return err;
++			}
++			*own_addr_type = BT_HCI_OWN_ADDR_RANDOM;
++		} else {
++			*own_addr_type = BT_HCI_OWN_ADDR_PUBLIC;
++		}
++	} else if (IS_ENABLED(CONFIG_BT_PRIVACY)) {
+ 		if (use_filter || rpa_timeout_valid_check()) {
+ 			err = bt_id_set_private_addr(BT_ID_DEFAULT);
+ 			if (err) {
+@@ -1836,7 +1851,23 @@ int bt_id_set_scan_own_addr(bool active_scan, uint8_t *own_addr_type)
+ 		return -EINVAL;
+ 	}
+ 
+-	if (IS_ENABLED(CONFIG_BT_PRIVACY)) {
++	if (IS_ENABLED(CONFIG_CANON_REMOTE_FIXED_IDENTITY)) {
++		/* Canon pairing treats the active scanner and the subsequent
++		 * initiator as one remote. Keep the scan address identical to the
++		 * fixed identity address selected for direct connections.
++		 */
++		const bt_addr_le_t *addr = &bt_dev.id_addr[BT_ID_DEFAULT];
++
++		if (addr->type == BT_ADDR_LE_RANDOM) {
++			err = set_random_address(&addr->a);
++			if (err) {
++				return err;
++			}
++			*own_addr_type = BT_HCI_OWN_ADDR_RANDOM;
++		} else {
++			*own_addr_type = BT_HCI_OWN_ADDR_PUBLIC;
++		}
++	} else if (IS_ENABLED(CONFIG_BT_PRIVACY)) {
+ 
+ 		if (BT_FEAT_LE_PRIVACY(bt_dev.le.features)) {
+ 			*own_addr_type = BT_HCI_OWN_ADDR_RPA_OR_RANDOM;

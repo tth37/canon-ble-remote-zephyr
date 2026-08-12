@@ -17,6 +17,7 @@ TOOLS_MARKER := $(ROOT)/.venv/.zephyr-tools-v2
 export PATH := $(ROOT)/.venv/bin:$(PATH)
 WEST_CONFIG := $(ROOT)/.west/config
 ZEPHYR_BASE := $(ROOT)/.zephyr/zephyr
+ZEPHYR_PATCH := $(ROOT)/patches/zephyr/0001-canon-fixed-identity.patch
 ZEPHYR_VERSION := 4.2.0
 ZEPHYR_SDK_VERSION := 0.17.2
 ZEPHYR_PROJECTS_MARKER := $(ROOT)/.zephyr/.updated-v$(ZEPHYR_VERSION)
@@ -30,7 +31,7 @@ BOARD_KEY := $(subst /,_,$(BOARD))
 BUILD_ROOT := $(ROOT)/.build
 BUILD_DIR := $(BUILD_ROOT)/$(BOARD_KEY)
 
-.PHONY: help board select setup build upload flash serial \
+.PHONY: help board select setup patch-zephyr build upload flash serial \
 	compile-commands clean pristine clean-all
 
 help:
@@ -86,8 +87,20 @@ $(ZEPHYR_SDK_MARKER): $(ZEPHYR_PROJECTS_MARKER)
 		--toolchains arm-zephyr-eabi riscv64-zephyr-elf
 	touch "$@"
 
+patch-zephyr: $(ZEPHYR_PROJECTS_MARKER)
+	@if git -C "$(ZEPHYR_BASE)" apply --reverse --check \
+		"$(ZEPHYR_PATCH)" >/dev/null 2>&1; then \
+		echo "Zephyr Canon identity patch already applied"; \
+	elif git -C "$(ZEPHYR_BASE)" apply --check "$(ZEPHYR_PATCH)"; then \
+		git -C "$(ZEPHYR_BASE)" apply "$(ZEPHYR_PATCH)"; \
+		echo "Applied Zephyr Canon identity patch"; \
+	else \
+		echo "Pinned Zephyr source does not match the Canon identity patch" >&2; \
+		exit 1; \
+	fi
+
 setup: $(ZEPHYR_PACKAGES_MARKER) $(ZEPHYR_BLOBS_MARKER) \
-	$(ZEPHYR_SDK_MARKER)
+	$(ZEPHYR_SDK_MARKER) patch-zephyr
 
 build: setup
 	$(WEST) build --build-dir "$(BUILD_DIR)" --board "$(BOARD)" \

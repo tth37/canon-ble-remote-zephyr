@@ -1,0 +1,12 @@
+mainmenu "Canon BLE Remote"
+
+source "Kconfig.zephyr"
+
+config CANON_REMOTE_FIXED_IDENTITY
+	bool "Use a fixed BLE identity for Canon interoperability"
+	depends on BT_PRIVACY && BT_CENTRAL && BT_OBSERVER
+	help
+	  Use the controller identity address for active scanning and direct
+	  connections while retaining privacy support for SMP identity-key
+	  distribution. Some Canon cameras accept an IRK during pairing but do
+	  not reliably resolve a remote's later resolvable private addresses.
