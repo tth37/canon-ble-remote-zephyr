@@ -45,16 +45,17 @@ pairing transaction after a five-second hold, suppressing the camera controls
 until pairing finishes and all inputs are released. This keeps pairing
 recognition out of the latency-sensitive focus and shutter paths. The OLED
 worker renders the module's thread-safe status snapshot, physical inputs, and
-PAIR countdown. The ESP32-C6 Devicetree overlay supplies the concrete pins and
+PAIR countdown. Board-specific Devicetree overlays supply the concrete pins and
 SSD1306 node. Targets without those aliases and the chosen display compile
 small no-op adapters, keeping board selection out of the Canon module.
 
 While the synchronous pairing transaction owns the GPIO worker, a debounced
 delayable work item watches for fresh button presses and advances the Canon
 module's cancellation generation. Guarded scan, connection, security, and
-discovery waits notice cancellation within approximately 20 ms. The release
-of the original PAIR hold is ignored, while a later press of any button
-cancels pairing without leaking a camera command.
+discovery waits notice cancellation within approximately 20 ms. Cancellation
+closes before the registration write, after which bonding and reconnect finish
+as one transaction. The release of the original PAIR hold is ignored, while a
+later press during the cancellable phase does not leak a camera command.
 
 The RGB indicator worker reads the same snapshots and drives the ESP32-C6
 DevKitC's single WS2812-compatible LED through Zephyr's I2S LED-strip driver.

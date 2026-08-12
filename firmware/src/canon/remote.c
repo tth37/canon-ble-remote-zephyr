@@ -53,6 +53,10 @@ BUILD_ASSERT(sizeof(CANON_REMOTE_NAME) - 1U <= CANON_REMOTE_NAME_MAX,
 #define BUTTON_SHUTTER_BIT CANON_REMOTE_BUTTON_SHUTTER
 #define BUTTON_STATE_MASK (BIT(BUTTON_FOCUS_BIT) | BIT(BUTTON_SHUTTER_BIT))
 
+#define PAIR_CANCEL_CLOSED 0
+#define PAIR_CANCEL_OPEN 1
+#define PAIR_CANCEL_REQUESTED 2
+
 static struct bt_uuid_128 canon_service_uuid =
     BT_UUID_INIT_128(CANON_SERVICE_UUID_LE_BYTES);
 static struct bt_uuid_128 canon_pairing_uuid =
@@ -97,7 +101,7 @@ typedef struct {
     atomic_t applied_buttons;
     atomic_t button_generation;
     atomic_t button_cancel_generation;
-    atomic_t explicit_cancel_generation;
+    atomic_t pairing_cancel_state;
 
     bt_addr_le_t camera_address;
     bt_addr_le_t scan_address;
@@ -116,7 +120,7 @@ static struct k_thread button_thread;
 
 typedef struct {
     atomic_val_t button_cancel_generation;
-    atomic_val_t explicit_cancel_generation;
+    bool allow_explicit_cancel;
     int64_t deadline_ms;
 } operation_guard_t;
 
@@ -195,10 +199,12 @@ static canon_remote_result_t result_from_error(int error)
 
 static bool operation_cancelled(const operation_guard_t *guard)
 {
-    return guard != NULL && (atomic_get(&context.button_cancel_generation) !=
-                                 guard->button_cancel_generation ||
-                             atomic_get(&context.explicit_cancel_generation) !=
-                                 guard->explicit_cancel_generation);
+    return guard != NULL &&
+           (atomic_get(&context.button_cancel_generation) !=
+                guard->button_cancel_generation ||
+            (guard->allow_explicit_cancel &&
+             atomic_get(&context.pairing_cancel_state) ==
+                 PAIR_CANCEL_REQUESTED));
 }
 
 static canon_remote_result_t wait_for_operation(struct k_sem *semaphore,
@@ -802,8 +808,6 @@ canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
         return CANON_REMOTE_INVALID_ARGUMENT;
     }
 
-    const atomic_val_t explicit_cancel_generation =
-        atomic_get(&context.explicit_cancel_generation);
     canon_remote_result_t result = begin_operation(false);
     if (result != CANON_REMOTE_OK) {
         return result;
@@ -812,10 +816,12 @@ canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
     const operation_guard_t guard = {
         .button_cancel_generation =
             atomic_get(&context.button_cancel_generation),
-        .explicit_cancel_generation = explicit_cancel_generation,
+        .allow_explicit_cancel = true,
         .deadline_ms = k_uptime_get() + PAIR_OPERATION_TIMEOUT_MS,
     };
+    atomic_set(&context.pairing_cancel_state, PAIR_CANCEL_OPEN);
     if (operation_cancelled(&guard)) {
+        atomic_set(&context.pairing_cancel_state, PAIR_CANCEL_CLOSED);
         finish_operation();
         return CANON_REMOTE_CANCELLED;
     }
@@ -856,9 +862,13 @@ canon_remote_result_t canon_remote_pair(uint32_t scan_seconds)
         !canon_protocol_make_pairing_packet(CANON_REMOTE_NAME, &packet)) {
         result = CANON_REMOTE_INVALID_ARGUMENT;
     }
-    if (result == CANON_REMOTE_OK && operation_cancelled(&guard)) {
+    const bool cancel_requested = !atomic_cas(
+        &context.pairing_cancel_state, PAIR_CANCEL_OPEN, PAIR_CANCEL_CLOSED);
+    if (result == CANON_REMOTE_OK &&
+        (cancel_requested || operation_cancelled(&guard))) {
         result = CANON_REMOTE_CANCELLED;
     }
+    atomic_set(&context.pairing_cancel_state, PAIR_CANCEL_CLOSED);
     if (result == CANON_REMOTE_OK) {
         struct bt_conn *connection = connection_ref();
         if (connection == NULL) {
@@ -926,7 +936,10 @@ canon_remote_result_t canon_remote_cancel_pairing(void)
     if (!atomic_get(&context.initialized) || !atomic_get(&context.host_ready)) {
         return CANON_REMOTE_NOT_READY;
     }
-    atomic_inc(&context.explicit_cancel_generation);
+    if (!atomic_cas(&context.pairing_cancel_state, PAIR_CANCEL_OPEN,
+                    PAIR_CANCEL_REQUESTED)) {
+        return CANON_REMOTE_BUSY;
+    }
     return CANON_REMOTE_OK;
 }
 
@@ -1078,8 +1091,7 @@ static void process_button_state(void)
         const operation_guard_t guard = {
             .button_cancel_generation =
                 atomic_get(&context.button_cancel_generation),
-            .explicit_cancel_generation =
-                atomic_get(&context.explicit_cancel_generation),
+            .allow_explicit_cancel = false,
             .deadline_ms = k_uptime_get() + BUTTON_OPERATION_TIMEOUT_MS,
         };
 

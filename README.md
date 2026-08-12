@@ -6,7 +6,7 @@ application and one source set build for both supported boards:
 | Zephyr board target | Console | Validation |
 |---|---|---|
 | `esp32c6_devkitc/esp32c6/hpcore` | UART0, 115200 baud | Built, flashed, and tested with a Canon 200D II |
-| `promicro_nrf52840/nrf52840/uf2` | native USB CDC | Builds and produces UF2; hardware validation pending |
+| `promicro_nrf52840/nrf52840/uf2` | native USB CDC | Built, flashed, and hardware-tested with the display and buttons |
 
 ## Reproducible setup
 
@@ -138,9 +138,11 @@ then hold the recessed PAIR button for five seconds. The OLED shows the hold
 countdown and the subsequent 30-second scan. Focus and shutter are suppressed
 while PAIR is held or pairing is active, and all buttons must be released
 before camera control is armed again. Releasing PAIR early cancels the request.
-After the scan starts, a new press of focus, shutter, or PAIR cancels it; the
-PAIR release following the five-second hold does not. A successful pairing can
-replace the saved camera; cancelling or failing preserves the existing peer.
+Before camera registration starts, a new press of focus, shutter, or PAIR
+cancels the operation; the PAIR release following the five-second hold does
+not. Cancelling during that phase preserves the existing peer. Once a camera
+has been found, its stale bond may need to be removed before forced re-pairing,
+so a later registration failure can require another pairing attempt.
 
 The onboard RGB LED needs no external wiring. It blinks blue at its normal
 rate during the five-second PAIR hold, then blinks blue faster while pairing is
@@ -148,13 +150,30 @@ active. It shines green while focus is held and flashes red while shutter is
 held. Pairing has the highest effect priority, followed by shutter and then
 focus. The LED is off while the controls are idle.
 
+## nRF52840 display and buttons
+
+The Pro Micro/nice!nano-compatible nRF52840 uses the same display and controls
+without a status-light indicator:
+
+| Part | Board label | nRF52840 pin | Other connection |
+|---|---|---|---|
+| 128x64 SSD1306 OLED SDA | D6 | P1.00 | - |
+| 128x64 SSD1306 OLED SCL | D7 | P0.11 | - |
+| Focus button | D3 | P0.20 | GND |
+| Shutter button | D4 | P0.22 | GND |
+| Recessed PAIR button | D2 | P0.17 | GND |
+
+Connect the OLED to the board's 3.3 V VCC and GND pins. The display uses I2C
+address `0x3c`; all three buttons use internal pull-ups and active-low edges.
+The nRF52840 overlay deliberately defines no `status-led` alias.
+
 ## Physical control reliability
 
 GPIO interrupt handlers must call `canon_remote_set_button()` rather than the
 synchronous `canon_remote_focus()` or `canon_remote_shutter()` pulse helpers.
 The state API is non-blocking and ISR-safe: it only updates atomics and wakes a
-dedicated Canon button thread. The ESP32-C6 GPIO module supplies the quiet-time
-debounce layer described above.
+dedicated Canon button thread. The board-specific GPIO adapter supplies the
+quiet-time debounce layer described above.
 
 ```c
 canon_remote_set_button(CANON_REMOTE_BUTTON_FOCUS, true);   /* pressed */
