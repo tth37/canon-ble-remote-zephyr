@@ -1,0 +1,50 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	chosen {
+		zephyr,display = &status_oled;
+	};
+
+	aliases {
+		focus-button = &focus_button;
+		shutter-button = &shutter_button;
+		pair-button = &pair_button;
+	};
+
+	canon_buttons {
+		compatible = "gpio-keys";
+
+		focus_button: focus_button {
+			label = "Canon focus";
+			gpios = <&gpio0 20 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+		};
+
+		shutter_button: shutter_button {
+			label = "Canon shutter";
+			gpios = <&gpio0 22 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+		};
+
+		pair_button: pair_button {
+			label = "Canon pair";
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+		};
+	};
+};
+
+&i2c0 {
+	status = "okay";
+
+	status_oled: ssd1306@3c {
+		compatible = "solomon,ssd1306fb";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		prechargep = <0x22>;
+	};
+};
