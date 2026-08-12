@@ -10,8 +10,10 @@ target_sources(app PRIVATE
     src/hardware/controls.c
     src/hardware/display.c
     src/hardware/indicator.c
-    src/shell_commands.c
+    src/hardware/power.c
 )
+
+target_sources_ifdef(CONFIG_SHELL app PRIVATE src/shell_commands.c)
 
 target_include_directories(app PRIVATE
     src

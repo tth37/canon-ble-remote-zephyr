@@ -5,12 +5,18 @@
 #include "hardware/controls.h"
 #include "hardware/display.h"
 #include "hardware/indicator.h"
+#include "hardware/power.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 int main(void)
 {
-    int result = hardware_display_initialize();
+    int result = hardware_power_initialize();
+    if (result != 0) {
+        LOG_ERR("Power management initialization failed: %d", result);
+    }
+
+    result = hardware_display_initialize();
     const bool display_ready = result == 0 && hardware_display_available();
     if (result != 0) {
         LOG_WRN("Status display unavailable: %d", result);
@@ -25,6 +31,9 @@ int main(void)
     const bool indicator_ready = result == 0 && hardware_indicator_available();
     if (result != 0) {
         LOG_WRN("Status LED unavailable: %d", result);
+    }
+    if (indicator_ready && hardware_power_woke_from_button()) {
+        hardware_indicator_show_deep_sleep_wake();
     }
 
     const canon_remote_result_t remote_result = canon_remote_initialize();
@@ -53,6 +62,13 @@ int main(void)
         result = hardware_indicator_start();
         if (result != 0) {
             LOG_WRN("Could not start status LED: %d", result);
+        }
+    }
+
+    if (remote_result == CANON_REMOTE_OK && hardware_controls_available()) {
+        result = hardware_power_start();
+        if (result != 0) {
+            LOG_ERR("Could not start idle power management: %d", result);
         }
     }
 

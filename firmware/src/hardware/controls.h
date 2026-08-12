@@ -21,6 +21,7 @@ int hardware_controls_initialize(void);
 int hardware_controls_start(void);
 
 void hardware_controls_get_status(hardware_controls_status_t *status);
+uint32_t hardware_controls_activity_generation(void);
 bool hardware_controls_available(void);
 
 #endif

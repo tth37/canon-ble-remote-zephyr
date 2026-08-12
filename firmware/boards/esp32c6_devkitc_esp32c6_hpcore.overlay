@@ -1,16 +1,13 @@
 #include <zephyr/dt-bindings/gpio/gpio.h>
-#include <zephyr/dt-bindings/led/led.h>
 
 / {
-	chosen {
-		zephyr,display = &status_oled;
-	};
-
 	aliases {
 		focus-button = &focus_button;
 		shutter-button = &shutter_button;
 		pair-button = &pair_button;
-		status-led = &status_led;
+		status-led-red = &status_led_red;
+		status-led-green = &status_led_green;
+		status-led-blue = &status_led_blue;
 	};
 
 	canon_buttons {
@@ -18,70 +15,38 @@
 
 		focus_button: focus_button {
 			label = "Canon focus";
-			gpios = <&gpio0 20 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			gpios = <&gpio0 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 		};
 
 		shutter_button: shutter_button {
 			label = "Canon shutter";
-			gpios = <&gpio0 21 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			gpios = <&gpio0 7 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 		};
 
 		pair_button: pair_button {
 			label = "Canon pair";
-			gpios = <&gpio0 19 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			gpios = <&gpio0 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+		};
+	};
+
+	status_leds {
+		compatible = "gpio-leds";
+
+		status_led_red: red {
+			gpios = <&gpio0 0 GPIO_ACTIVE_HIGH>;
+		};
+
+		status_led_green: green {
+			gpios = <&gpio0 1 GPIO_ACTIVE_HIGH>;
+		};
+
+		status_led_blue: blue {
+			gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
 		};
 	};
 };
 
-&pinctrl {
-	status_led_i2s_default: status_led_i2s_default {
-		group1 {
-			pinmux = <I2S_O_SD_GPIO8>;
-		};
-	};
-};
-
-&i2s {
-	status = "okay";
-	pinctrl-0 = <&status_led_i2s_default>;
-	pinctrl-names = "default";
-	dmas = <&dma 3>;
-	dma-names = "tx";
-
-	status_led: ws2812@0 {
-		compatible = "worldsemi,ws2812-i2s";
-		reg = <0>;
-		chain-length = <1>;
-		color-mapping = <LED_COLOR_ID_GREEN
-				 LED_COLOR_ID_RED
-				 LED_COLOR_ID_BLUE>;
-		reset-delay = <500>;
-	};
-};
-
-&dma {
-	status = "okay";
-};
-
-/* The upstream board definition also assigns GPIO6/GPIO7 to SPI2. */
+/* The upstream board definition assigns GPIO2/GPIO6/GPIO7 to SPI2. */
 &spi2 {
 	status = "disabled";
-};
-
-&i2c0 {
-	status = "okay";
-
-	status_oled: ssd1306@3c {
-		compatible = "solomon,ssd1306fb";
-		reg = <0x3c>;
-		width = <128>;
-		height = <64>;
-		segment-offset = <0>;
-		page-offset = <0>;
-		display-offset = <0>;
-		multiplex-ratio = <63>;
-		segment-remap;
-		com-invdir;
-		prechargep = <0x22>;
-	};
 };

@@ -14,6 +14,8 @@ Board variation belongs in Zephyr's existing seams:
 - `firmware/boards/<board>.conf` selects board-specific Kconfig policy.
 - Zephyr supplies the Bluetooth controller, host, storage, kernel, shell, and
   flash APIs used by the application.
+- Application profiles select diagnostics and product power policy without
+  changing the board's physical wiring.
 
 There is deliberately no custom HAL or application-level `if (esp32)` /
 `if (nrf52)` switch. A new Zephyr-supported board should need a configuration
@@ -43,11 +45,11 @@ quiet-time debounce before calling `canon_remote_set_button()` for stable focus
 and shutter transitions. A separate recessed PAIR input invokes the module's
 pairing transaction after a five-second hold, suppressing the camera controls
 until pairing finishes and all inputs are released. This keeps pairing
-recognition out of the latency-sensitive focus and shutter paths. The OLED
-worker renders the module's thread-safe status snapshot, physical inputs, and
-PAIR countdown. Board-specific Devicetree overlays supply the concrete pins and
-SSD1306 node. Targets without those aliases and the chosen display compile
-small no-op adapters, keeping board selection out of the Canon module.
+recognition out of the latency-sensitive focus and shutter paths. The optional
+OLED worker renders the module's thread-safe status snapshot, physical inputs,
+and PAIR countdown on boards that define a display. Board-specific Devicetree
+overlays supply concrete pins and peripherals. Targets without those aliases
+compile small no-op adapters, keeping board selection out of the Canon module.
 
 While the synchronous pairing transaction owns the GPIO worker, a debounced
 delayable work item watches for fresh button presses and advances the Canon
@@ -57,16 +59,26 @@ closes before the registration write, after which bonding and reconnect finish
 as one transaction. The release of the original PAIR hold is ignored, while a
 later press during the cancellable phase does not leak a camera command.
 
-The RGB indicator worker reads the same snapshots and drives the ESP32-C6
-DevKitC's single WS2812-compatible LED through Zephyr's I2S LED-strip driver.
-It is independent of GPIO and BLE workers: pairing produces a blue blink,
-with a faster rate after the five-second hold; shutter produces a red flash,
-focus steady green, and idle turns the LED off. Targets without the
-`status-led` alias compile a no-op indicator adapter.
+The RGB indicator worker reads the same snapshots and drives three independent
+GPIO channels supplied by board Devicetree aliases. It is independent of the
+button and BLE workers: pairing produces a blue blink, with a faster rate after
+the five-second hold; shutter produces a red flash, focus steady green, and
+idle turns the LED off. Targets without all three `status-led-{red,green,blue}`
+aliases compile a no-op indicator adapter.
 
 The UART shell remains active alongside the hardware adapter. It is an
 independent control and diagnostic surface, not a runtime dependency of the
 buttons or display.
+
+The ESP32-C6 release profile adds product power policy without changing the
+board overlay used by the debug profile. Its power worker observes physical
+input generations and the Canon module's status snapshot. After a configurable
+idle period it disconnects the Canon link, blanks the indicator, configures all
+three RTC GPIOs as active-low wake sources, and rechecks activity immediately
+before entering deep sleep. A button held when sleep entry completes wakes and
+resets the application; the controls adapter forwards a focus or shutter that
+remains held after boot. Pairing continues to require the normal five-second
+hold.
 
 Physical button edges use the module's non-blocking state API. Atomic desired
 state is consumed by a dedicated worker thread, keeping all connection,
@@ -120,7 +132,8 @@ integration; it does not invoke PlatformIO.
 1. Confirm the upstream Zephyr board target supports a serial console,
    persistent settings, BLE central/GATT client, and SMP bonding.
 2. Add its exact board target to `SUPPORTED_BOARDS` in the root Makefile.
-3. Add a board Kconfig fragment only if the common `prj.conf` is insufficient.
+3. Add a board Kconfig fragment only if both profile fragments are
+   insufficient.
 4. Add its compiler architecture to the `west sdk install` toolchain list if
    ARM or RISC-V does not cover it.
 5. Build with strict warnings, then test boot, serial input, pairing, bonded

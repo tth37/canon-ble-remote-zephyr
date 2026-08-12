@@ -12,5 +12,6 @@ sdkconfig.*
 !sdkconfig.defaults
 compile_commands.json
 .cache/
-.board
+/.config
+/.config.old
 .build/

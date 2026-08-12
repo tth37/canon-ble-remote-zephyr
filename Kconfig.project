@@ -1,0 +1,35 @@
+mainmenu "Canon BLE Remote Build"
+
+choice PROJECT_BOARD
+	prompt "Target board"
+	default PROJECT_BOARD_ESP32C6
+
+config PROJECT_BOARD_ESP32C6
+	bool "ESP32-C6 DevKitC"
+	help
+	  Build for esp32c6_devkitc/esp32c6/hpcore.
+
+config PROJECT_BOARD_NRF52840
+	bool "Pro Micro nRF52840 (UF2)"
+	help
+	  Build for promicro_nrf52840/nrf52840/uf2.
+
+endchoice
+
+choice PROJECT_PROFILE
+	prompt "Build profile"
+	default PROJECT_PROFILE_DEBUG
+
+config PROJECT_PROFILE_DEBUG
+	bool "Debug"
+	help
+	  Keep the interactive shell and diagnostic logging enabled.
+
+config PROJECT_PROFILE_RELEASE
+	bool "Release"
+	depends on PROJECT_BOARD_ESP32C6
+	help
+	  Build the screenless product firmware with diagnostics disabled and
+	  automatic disconnect and deep sleep after the idle timeout.
+
+endchoice

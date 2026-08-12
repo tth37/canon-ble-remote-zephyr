@@ -5,7 +5,7 @@ application and one source set build for both supported boards:
 
 | Zephyr board target | Console | Validation |
 |---|---|---|
-| `esp32c6_devkitc/esp32c6/hpcore` | UART0, 115200 baud | Built, flashed, and tested with a Canon 200D II |
+| `esp32c6_devkitc/esp32c6/hpcore` | UART0 in debug builds | Built, flashed, and tested with a Canon 200D II |
 | `promicro_nrf52840/nrf52840/uf2` | native USB CDC | Built, flashed, and hardware-tested with the display and buttons |
 
 ## Reproducible setup
@@ -35,51 +35,120 @@ corresponding local dependencies.
 
 ## Select, build, and flash
 
-ESP32-C6 is the default. The selected native Zephyr board is stored in the
-ignored `.board` file:
+ESP32-C6 with the debug profile is the default. Use the project configuration
+menu to select a board and profile; the result is stored in the ignored root
+`.config` file:
 
 ```sh
-make select BOARD=esp32c6_devkitc/esp32c6/hpcore
+make menuconfig
 make build
 make upload
 make serial
 ```
 
-Select the Pro Micro nRF52840 with:
+The menu offers ESP32-C6 debug, ESP32-C6 release, and Pro Micro nRF52840 debug.
+Release is ESP32-C6-only because its deep-sleep policy uses Espressif wake
+hardware. Inspect the saved selection without opening the menu with:
 
 ```sh
-make select BOARD=promicro_nrf52840/nrf52840/uf2
-make build
-make upload
-make serial
+make selection
 ```
 
-`BOARD=...` can be passed directly to any command for a one-off or CI build
-without changing `.board`. Build output is isolated per board under `.build`.
+`BOARD=...` and `PROFILE=...` can still be passed directly to any command for
+a one-off or CI build without changing `.config`. Build output is isolated per
+board and profile under `.build`.
 `FLASH_ARGS` forwards additional arguments to `west flash`, and `SERIAL_PORT`
 overrides automatic serial-port detection.
+
+### ESP32-C6 build profiles
+
+Both ESP32-C6 profiles use the same screenless hardware: three ordinary
+buttons and an external common-cathode RGB LED. Debug is the default and keeps
+the UART shell and logging available through `firmware/prj_debug.conf`. Release
+uses `firmware/prj_release.conf` and is the product firmware:
+
+```sh
+make build BOARD=esp32c6_devkitc/esp32c6/hpcore PROFILE=debug
+make build BOARD=esp32c6_devkitc/esp32c6/hpcore PROFILE=release
+make upload BOARD=esp32c6_devkitc/esp32c6/hpcore PROFILE=release
+```
+
+The release profile disables the shell, logging, and console. After 30 seconds
+without a button edge or active BLE operation, it disconnects, turns off the
+RGB LED, and enters deep sleep. Once asleep, any button wakes the chip through
+a reset; a held focus or shutter input is forwarded after boot so the waking
+press is not discarded. A GPIO deep-sleep wake produces a 300 ms white RGB flash before BLE
+initialization; ordinary reset and power-up do not. The bond and saved camera
+identity remain in flash. The debug profile stays awake for diagnostics.
+
+ESP32-C6 deep-sleep wake is limited to RTC-capable GPIO0 through GPIO7, so this
+shared wiring keeps every button in that range:
+
+| Control | ESP32-C6 pin | Other connection |
+|---|---|---|
+| Focus button | GPIO6 | GND |
+| Shutter button | GPIO7 | GND |
+| Recessed PAIR button | GPIO4 | GND |
+| RGB LED red leg | GPIO0 through 1 kΩ | - |
+| RGB LED green leg | GPIO1 through 1 kΩ | - |
+| RGB LED blue leg | GPIO2 through 1 kΩ | - |
+| RGB LED common cathode | - | GND |
+
+Use one resistor per color channel; do not connect a color leg directly to a
+GPIO. All inputs are active-low with internal pull-ups. Do not attach the old
+OLED wiring because GPIO6 and GPIO7 are now focus and shutter in both profiles.
+
+For power measurements, supply the board through its power input with USB
+disconnected and place a power analyzer in series. Record at least these
+states separately:
+
+1. Deep sleep after the 30-second timeout.
+2. Awake and connected to the camera with no button held.
+3. Wake, reconnect, focus, and shutter energy over a representative session.
+
+The DevKitC includes its own regulator, USB circuitry, and board-level loads,
+so its result predicts this development board, not a future bare ESP32-C6 PCB.
+Estimate a CR2032 only from the measured time-weighted average current:
+
+```text
+average current = total measured charge / measurement duration
+ideal life hours = usable battery capacity in mAh / average current in mA
+```
+
+Use the battery's usable capacity at the measured pulse load and cutoff
+voltage, then apply margin for temperature and self-discharge. A CR2032 should
+not be connected directly to the DevKitC until its required supply path and
+radio-current peaks have been verified.
 
 Useful commands:
 
 ```sh
 make help
 make board
+make selection
+make menuconfig
+make zephyr-menuconfig
 make compile-commands
 make pristine
 ```
+
+`make menuconfig` selects the project board and profile. After a build exists,
+`make zephyr-menuconfig` opens Zephyr's full Kconfig interface for that selected
+firmware build; it is intended for inspection and temporary experiments rather
+than defining a committed profile.
 
 The corresponding direct Zephyr command is also available after setup:
 
 ```sh
 .venv/bin/west build -b esp32c6_devkitc/esp32c6/hpcore -d \
-  .build/esp32c6_devkitc_esp32c6_hpcore firmware
+  .build/esp32c6_devkitc_esp32c6_hpcore_debug firmware -- \
+  -DFILE_SUFFIX=debug
 ```
 
 ## Serial shell
 
-The UART shell remains available with the OLED and physical controls attached;
-it uses GPIO16/GPIO17 and does not share their pins. It is optional during
-normal camera use and remains useful for diagnostics and recovery:
+The UART shell is available only in `PROFILE=debug`. It uses GPIO16/GPIO17 and
+does not share the controls or indicator pins:
 
 ```text
 help
@@ -93,7 +162,6 @@ camera focus [press|release]
 camera status
 camera disconnect
 camera forget
-i2c scan i2c@60004000
 ```
 
 The serial helper sends one carriage return for Enter and leaves received CRLF
@@ -102,28 +170,26 @@ passes Zephyr's ANSI prompt and history-redraw sequences directly to the host
 terminal, so arrow-key history and colored prompts render normally. Exit it
 with `Ctrl+]`.
 
-## ESP32-C6 display and buttons
+## ESP32-C6 controls and indicator
 
-The ESP32-C6 board overlay defines the following active hardware:
+The ESP32-C6 board overlay defines one hardware layout shared by debug and
+release builds:
 
 | Part | Module pin | ESP32-C6 pin |
 |---|---|---|
-| 128x64 SSD1306 OLED | VCC | 3V3 |
-| 128x64 SSD1306 OLED | GND | GND |
-| 128x64 SSD1306 OLED | SDA | GPIO6 |
-| 128x64 SSD1306 OLED | SCL | GPIO7 |
-| Focus button | one side | GPIO20 |
+| Focus button | one side | GPIO6 |
 | Focus button | other side | GND |
-| Shutter button | one side | GPIO21 |
+| Shutter button | one side | GPIO7 |
 | Shutter button | other side | GND |
-| Recessed PAIR button | one side | GPIO19 |
+| Recessed PAIR button | one side | GPIO4 |
 | Recessed PAIR button | other side | GND |
-| Onboard addressable RGB LED | data | GPIO8 |
+| RGB LED red leg | through 1 kΩ | GPIO0 |
+| RGB LED green leg | through 1 kΩ | GPIO1 |
+| RGB LED blue leg | through 1 kΩ | GPIO2 |
+| RGB LED common cathode | GND | - |
 
-The OLED is configured at I2C address `0x3c`. Power it from 3.3 V so any
-module-mounted I2C pull-ups cannot expose the ESP32-C6 to 5 V. SPI2 is disabled
-by the application overlay because Zephyr's upstream DevKitC definition also
-assigns GPIO6/GPIO7 to that unused peripheral.
+SPI2 is disabled by the application overlay because Zephyr's upstream DevKitC
+definition assigns GPIO2/GPIO6/GPIO7 to that unused peripheral.
 
 All three inputs use internal pull-ups and active-low edges. A board-specific
 worker waits until an input has been quiet for 8 ms before reading its stable
@@ -132,23 +198,25 @@ module's non-blocking state API, without a two-button chord delay. Pressing and
 holding focus or shutter holds the corresponding camera-side state; releasing
 the physical button releases it.
 
-GPIO19 is a dedicated application PAIR input, not the board's EN/reset input.
+GPIO4 is a dedicated application PAIR input, not the board's EN/reset input.
 To pair at any time, first put the camera in Bluetooth Remote pairing mode,
-then hold the recessed PAIR button for five seconds. The OLED shows the hold
-countdown and the subsequent 30-second scan. Focus and shutter are suppressed
-while PAIR is held or pairing is active, and all buttons must be released
-before camera control is armed again. Releasing PAIR early cancels the request.
+then hold the recessed PAIR button for five seconds. The LED blinks blue during
+the hold and faster during the subsequent scan. Focus and shutter are
+suppressed while PAIR is held or pairing is active, and all buttons must be
+released before camera control is armed again. Releasing PAIR early cancels the
+request.
 Before camera registration starts, a new press of focus, shutter, or PAIR
 cancels the operation; the PAIR release following the five-second hold does
 not. Cancelling during that phase preserves the existing peer. Once a camera
 has been found, its stale bond may need to be removed before forced re-pairing,
 so a later registration failure can require another pairing attempt.
 
-The onboard RGB LED needs no external wiring. It blinks blue at its normal
-rate during the five-second PAIR hold, then blinks blue faster while pairing is
-active. It shines green while focus is held and flashes red while shutter is
-held. Pairing has the highest effect priority, followed by shutter and then
-focus. The LED is off while the controls are idle.
+Use one resistor per color channel; do not connect a color leg directly to a
+GPIO. The LED blinks blue at its normal rate during the five-second PAIR hold,
+then blinks blue faster while pairing is active. It shines green while focus is
+held and flashes red while shutter is held. Pairing has the highest effect
+priority, followed by shutter and then focus. The LED is off while the controls
+are idle.
 
 ## nRF52840 display and buttons
 
@@ -188,8 +256,8 @@ state. Any failed state write forces a disconnect instead of leaving an
 uncertain pressed state.
 
 An established encrypted link normally stays idle between presses. That keeps
-button latency low and does not block the CPU, shell, OLED refresh, or GPIO
-handling. The same path can be exercised from UART:
+button latency low and does not block the CPU, shell, indicator, or GPIO
+handling. The same path can be exercised from UART in a debug build:
 
 ```text
 camera focus press
@@ -239,7 +307,7 @@ firmware/                one Zephyr application for every board
                          and Devicetree overlays
   src/
     canon/               complete Canon Remote module
-    hardware/            GPIO controls and OLED status adapter
+    hardware/            controls, indicator, display, and power adapters
     main.c               application entry point
     shell_commands.c     serial-shell adapter
   west.yml               pinned Zephyr workspace manifest

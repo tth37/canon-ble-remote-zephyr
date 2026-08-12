@@ -7,6 +7,7 @@
 #include <zephyr/logging/log.h>
 
 #include "canon/remote.h"
+#include "power.h"
 
 LOG_MODULE_REGISTER(hardware_controls, LOG_LEVEL_INF);
 
@@ -52,6 +53,7 @@ K_THREAD_STACK_DEFINE(hardware_button_thread_stack, BUTTON_THREAD_STACK_SIZE);
 K_SEM_DEFINE(button_edge, 0, 1);
 
 static atomic_t physical_buttons;
+static atomic_t activity_generation;
 static atomic_t pair_hold_remaining_ms;
 static atomic_t pairing_active;
 static atomic_t pair_cancel_requested;
@@ -110,6 +112,7 @@ static void button_edge_callback(const struct device *port,
     (void)port;
     (void)callback;
     (void)pins;
+    atomic_inc(&activity_generation);
     k_sem_give(&button_edge);
     if (atomic_get(&pairing_active)) {
         (void)k_work_reschedule(&pair_cancel_work, K_MSEC(DEBOUNCE_QUIET_MS));
@@ -398,6 +401,10 @@ int hardware_controls_start(void)
     forwarded_shutter = false;
     if (pair_pressed) {
         enter_pair_hold(k_uptime_get());
+    } else if ((focus_pressed || shutter_pressed) &&
+               hardware_power_woke_from_button()) {
+        enter_active();
+        forward_button_state(focus_pressed, shutter_pressed);
     } else if (focus_pressed || shutter_pressed) {
         controls_mode = CONTROLS_WAIT_RELEASE;
         atomic_set(&pair_hold_remaining_ms, 0);
@@ -443,6 +450,11 @@ void hardware_controls_get_status(hardware_controls_status_t *status)
         (uint32_t)atomic_get(&pair_hold_remaining_ms);
 }
 
+uint32_t hardware_controls_activity_generation(void)
+{
+    return (uint32_t)atomic_get(&activity_generation);
+}
+
 bool hardware_controls_available(void) { return true; }
 
 #else
@@ -462,6 +474,8 @@ void hardware_controls_get_status(hardware_controls_status_t *status)
     status->pairing_active = false;
     status->pair_hold_remaining_ms = 0U;
 }
+
+uint32_t hardware_controls_activity_generation(void) { return 0U; }
 
 bool hardware_controls_available(void) { return false; }
 

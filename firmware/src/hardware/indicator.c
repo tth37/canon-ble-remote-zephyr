@@ -1,7 +1,7 @@
 #include "indicator.h"
 
 #include <errno.h>
-#include <string.h>
+#include <stdint.h>
 
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
@@ -12,11 +12,11 @@
 
 LOG_MODULE_REGISTER(hardware_indicator, LOG_LEVEL_INF);
 
-#if DT_NODE_HAS_STATUS(DT_ALIAS(status_led), okay)
+#if DT_NODE_HAS_STATUS(DT_ALIAS(status_led_red), okay) &&                  \
+    DT_NODE_HAS_STATUS(DT_ALIAS(status_led_green), okay) &&                \
+    DT_NODE_HAS_STATUS(DT_ALIAS(status_led_blue), okay)
 
-#include <zephyr/drivers/led_strip.h>
-
-#define STATUS_LED_NODE DT_ALIAS(status_led)
+#include <zephyr/drivers/gpio.h>
 
 #define INDICATOR_THREAD_STACK_SIZE 1536
 #define INDICATOR_THREAD_PRIORITY 8
@@ -25,10 +25,11 @@ LOG_MODULE_REGISTER(hardware_indicator, LOG_LEVEL_INF);
 #define PAIR_ACTIVE_BLINK_HALF_PERIOD_MS 100
 #define SHUTTER_FLASH_ON_MS 100
 #define SHUTTER_FLASH_PERIOD_MS 200
+#define DEEP_SLEEP_WAKE_FLASH_MS 300
 
-#define PAIR_BLUE 24U
-#define FOCUS_GREEN 18U
-#define SHUTTER_RED 40U
+#define RED_BIT (1U << 0)
+#define GREEN_BIT (1U << 1)
+#define BLUE_BIT (1U << 2)
 
 typedef enum {
     INDICATOR_OFF = 0,
@@ -38,14 +39,20 @@ typedef enum {
     INDICATOR_SHUTTER,
 } indicator_mode_t;
 
-static const struct device *const status_led = DEVICE_DT_GET(STATUS_LED_NODE);
+static const struct gpio_dt_spec red_led =
+    GPIO_DT_SPEC_GET(DT_ALIAS(status_led_red), gpios);
+static const struct gpio_dt_spec green_led =
+    GPIO_DT_SPEC_GET(DT_ALIAS(status_led_green), gpios);
+static const struct gpio_dt_spec blue_led =
+    GPIO_DT_SPEC_GET(DT_ALIAS(status_led_blue), gpios);
+
 static struct k_thread indicator_thread;
 K_THREAD_STACK_DEFINE(indicator_thread_stack, INDICATOR_THREAD_STACK_SIZE);
 
 static bool initialized;
 static bool started;
-static bool previous_pixel_valid;
-static struct led_rgb previous_pixel;
+static bool previous_output_valid;
+static uint8_t previous_output;
 
 static indicator_mode_t select_mode(void)
 {
@@ -70,49 +77,51 @@ static indicator_mode_t select_mode(void)
     return INDICATOR_OFF;
 }
 
-static struct led_rgb mode_pixel(indicator_mode_t mode, int64_t elapsed_ms)
+static uint8_t mode_output(indicator_mode_t mode, int64_t elapsed_ms)
 {
-    struct led_rgb pixel = {0};
-
     switch (mode) {
     case INDICATOR_PAIR_HOLD:
-        if ((elapsed_ms / PAIR_HOLD_BLINK_HALF_PERIOD_MS) % 2 == 0) {
-            pixel.b = PAIR_BLUE;
-        }
-        break;
+        return (elapsed_ms / PAIR_HOLD_BLINK_HALF_PERIOD_MS) % 2 == 0
+                   ? BLUE_BIT
+                   : 0U;
     case INDICATOR_PAIRING_ACTIVE:
-        if ((elapsed_ms / PAIR_ACTIVE_BLINK_HALF_PERIOD_MS) % 2 == 0) {
-            pixel.b = PAIR_BLUE;
-        }
-        break;
+        return (elapsed_ms / PAIR_ACTIVE_BLINK_HALF_PERIOD_MS) % 2 == 0
+                   ? BLUE_BIT
+                   : 0U;
     case INDICATOR_FOCUS:
-        pixel.g = FOCUS_GREEN;
-        break;
+        return GREEN_BIT;
     case INDICATOR_SHUTTER:
-        if (elapsed_ms % SHUTTER_FLASH_PERIOD_MS < SHUTTER_FLASH_ON_MS) {
-            pixel.r = SHUTTER_RED;
-        }
-        break;
+        return elapsed_ms % SHUTTER_FLASH_PERIOD_MS < SHUTTER_FLASH_ON_MS
+                   ? RED_BIT
+                   : 0U;
     case INDICATOR_OFF:
-        break;
+        return 0U;
     }
-    return pixel;
+    return 0U;
 }
 
-static void set_pixel(struct led_rgb pixel)
+static int set_output(uint8_t output)
 {
-    if (previous_pixel_valid &&
-        memcmp(&pixel, &previous_pixel, sizeof(pixel)) == 0) {
-        return;
+    if (previous_output_valid && output == previous_output) {
+        return 0;
     }
 
-    const int result = led_strip_update_rgb(status_led, &pixel, 1U);
+    int result = gpio_pin_set_dt(&red_led, (output & RED_BIT) != 0U);
+    if (result == 0) {
+        result = gpio_pin_set_dt(&green_led, (output & GREEN_BIT) != 0U);
+    }
+    if (result == 0) {
+        result = gpio_pin_set_dt(&blue_led, (output & BLUE_BIT) != 0U);
+    }
     if (result != 0) {
         LOG_WRN("Could not update status LED: %d", result);
-        return;
+        previous_output_valid = false;
+        return result;
     }
-    previous_pixel = pixel;
-    previous_pixel_valid = true;
+
+    previous_output = output;
+    previous_output_valid = true;
+    return 0;
 }
 
 static void indicator_thread_entry(void *first, void *second, void *third)
@@ -130,21 +139,35 @@ static void indicator_thread_entry(void *first, void *second, void *third)
         if (mode != previous_mode) {
             previous_mode = mode;
             mode_started_ms = now_ms;
+            previous_output_valid = false;
         }
-        set_pixel(mode_pixel(mode, now_ms - mode_started_ms));
+        (void)set_output(mode_output(mode, now_ms - mode_started_ms));
         k_msleep(INDICATOR_UPDATE_MS);
     }
 }
 
 int hardware_indicator_initialize(void)
 {
-    if (!device_is_ready(status_led)) {
+    if (!gpio_is_ready_dt(&red_led) || !gpio_is_ready_dt(&green_led) ||
+        !gpio_is_ready_dt(&blue_led)) {
         return -ENODEV;
     }
 
-    set_pixel((struct led_rgb){0});
+    int result = gpio_pin_configure_dt(&red_led, GPIO_OUTPUT_INACTIVE);
+    if (result == 0) {
+        result = gpio_pin_configure_dt(&green_led, GPIO_OUTPUT_INACTIVE);
+    }
+    if (result == 0) {
+        result = gpio_pin_configure_dt(&blue_led, GPIO_OUTPUT_INACTIVE);
+    }
+    if (result != 0) {
+        return result;
+    }
+
+    previous_output = 0U;
+    previous_output_valid = true;
     initialized = true;
-    LOG_INF("Onboard RGB status LED ready");
+    LOG_INF("External RGB status LED ready");
     return 0;
 }
 
@@ -168,11 +191,48 @@ int hardware_indicator_start(void)
 
 bool hardware_indicator_available(void) { return true; }
 
+void hardware_indicator_show_deep_sleep_wake(void)
+{
+    if (!initialized) {
+        return;
+    }
+
+    previous_output_valid = false;
+    (void)set_output(RED_BIT | GREEN_BIT | BLUE_BIT);
+    k_msleep(DEEP_SLEEP_WAKE_FLASH_MS);
+    (void)set_output(0U);
+}
+
+void hardware_indicator_prepare_for_sleep(void)
+{
+    if (started) {
+        k_thread_suspend(&indicator_thread);
+    }
+    if (initialized) {
+        previous_output_valid = false;
+        (void)set_output(0U);
+    }
+}
+
+void hardware_indicator_resume_after_sleep_abort(void)
+{
+    if (started) {
+        previous_output_valid = false;
+        k_thread_resume(&indicator_thread);
+    }
+}
+
 #else
 
 int hardware_indicator_initialize(void) { return 0; }
 
 int hardware_indicator_start(void) { return 0; }
+
+void hardware_indicator_show_deep_sleep_wake(void) {}
+
+void hardware_indicator_prepare_for_sleep(void) {}
+
+void hardware_indicator_resume_after_sleep_abort(void) {}
 
 bool hardware_indicator_available(void) { return false; }
 

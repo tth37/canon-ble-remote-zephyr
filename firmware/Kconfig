@@ -10,3 +10,20 @@ config CANON_REMOTE_FIXED_IDENTITY
 	  connections while retaining privacy support for SMP identity-key
 	  distribution. Some Canon cameras accept an IRK during pairing but do
 	  not reliably resolve a remote's later resolvable private addresses.
+
+config CANON_POWER_SAVE
+	bool "Enter deep sleep after an idle timeout"
+	depends on SOC_SERIES_ESP32C6 && POWEROFF
+	help
+	  Disconnect from the camera and enter ESP32-C6 deep sleep after the
+	  controls and BLE operation have remained idle. A focus, shutter, or
+	  pair button on an RTC-capable GPIO wakes the remote by resetting it.
+
+config CANON_POWER_IDLE_TIMEOUT_SECONDS
+	int "Idle timeout before deep sleep"
+	depends on CANON_POWER_SAVE
+	range 10 86400
+	default 120
+	help
+	  Number of seconds without a pressed button or active BLE operation
+	  before the remote disconnects and enters deep sleep.
